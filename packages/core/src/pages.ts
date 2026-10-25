@@ -24,7 +24,7 @@ const HTML_ESCAPES: Record<string, string> = {
   "'": "&#39;",
 };
 
-function escapeHtml(value: string): string {
+export function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char] ?? char);
 }
 
@@ -49,23 +49,27 @@ for (const button of document.querySelectorAll("button[data-accept]")) {
   });
 }
 `;
-let consentScriptHash: Promise<string> | undefined;
+const scriptHashes = new Map<string, Promise<string>>();
 
-/** Base64 SHA-256 of CONSENT_SCRIPT for the CSP, computed once on first use. */
-function getConsentScriptHash(): Promise<string> {
-  consentScriptHash ??= crypto.subtle
-    .digest("SHA-256", new TextEncoder().encode(CONSENT_SCRIPT))
-    .then((digest) => btoa(String.fromCharCode(...new Uint8Array(digest))));
-  return consentScriptHash;
+/** Base64 SHA-256 of an inline script for the CSP, computed once per script. */
+export function scriptHash(script: string): Promise<string> {
+  let hash = scriptHashes.get(script);
+  if (!hash) {
+    hash = crypto.subtle
+      .digest("SHA-256", new TextEncoder().encode(script))
+      .then((digest) => btoa(String.fromCharCode(...new Uint8Array(digest))));
+    scriptHashes.set(script, hash);
+  }
+  return hash;
 }
 
-function page(
+export function page(
   status: number,
   title: string,
   body: string,
-  scriptHash?: string,
+  hash?: string,
 ): Response {
-  const scriptSrc = scriptHash ? `'sha256-${scriptHash}'` : "'none'";
+  const scriptSrc = hash ? `'sha256-${hash}'` : "'none'";
   return new Response(
     `<!doctype html>
 <html lang="en-GB">
@@ -91,11 +95,17 @@ dd { margin: 0; }
 code { font: 0.875rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
 .actions { display: flex; gap: 0.75rem; margin-bottom: 1.25rem; }
 button { flex: 1; font: inherit; font-weight: 600; padding: 0.625rem 1rem; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--fg); cursor: pointer; }
-button[data-accept="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+button[data-accept="true"], button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
 button:hover:not(:disabled) { filter: brightness(1.08); }
 button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 button:disabled { opacity: 0.6; cursor: progress; }
 a { color: var(--accent); }
+label { display: block; margin-bottom: 1rem; font-size: 0.875rem; color: var(--muted); }
+input, textarea { display: block; width: 100%; margin-top: 0.25rem; padding: 0.5rem 0.625rem; font: 1rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg); background: transparent; border: 1px solid var(--border); border-radius: 8px; }
+ul { list-style: none; margin: 0 0 1.5rem; padding: 0; border: 1px solid var(--border); border-radius: 8px; }
+li { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.625rem 0.875rem; }
+li + li { border-top: 1px solid var(--border); }
+li button { flex: none; padding: 0.25rem 0.625rem; }
 .muted { font-size: 0.875rem; color: var(--muted); text-align: center; }
 #error { color: var(--danger); text-align: center; }
 </style>
@@ -226,7 +236,7 @@ export function createPages({
 <p id="error" hidden>Something went wrong. Start again from your MCP client.</p>
 <p class="muted"><a href="/sign-in?${escapeHtml(oauthQuery)}">Use a different Google account</a></p>
 <script>${CONSENT_SCRIPT}</script>`,
-      await getConsentScriptHash(),
+      await scriptHash(CONSENT_SCRIPT),
     );
   }
 

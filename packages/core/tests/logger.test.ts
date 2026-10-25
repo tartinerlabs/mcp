@@ -119,6 +119,30 @@ describe("createLogger", () => {
     expect(lines()[0]).toMatchObject({ id: 1, self: "[Circular]" });
   });
 
+  it("redacts private key fields", () => {
+    const lines = capture();
+    createLogger("test", { level: "info" }).error({
+      key: {
+        privateKey: "k",
+        private_key: "k",
+        p8: "k",
+        pem: "k",
+        ciphertext: "k",
+        keyId: "ABC",
+      },
+    });
+    expect(lines()[0]).toMatchObject({
+      key: {
+        privateKey: "[redacted]",
+        private_key: "[redacted]",
+        p8: "[redacted]",
+        pem: "[redacted]",
+        ciphertext: "[redacted]",
+        keyId: "ABC",
+      },
+    });
+  });
+
   it("drops lines below the level, and everything when silent", () => {
     const lines = capture();
     createLogger("test", { level: "warn" }).info({}, "hidden");

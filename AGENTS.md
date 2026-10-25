@@ -32,6 +32,8 @@ Request flow:
 
 Auth (`src/lib/auth.ts` calls `createAuth` from `packages/core/src/auth.ts` with the app's scopes): Better Auth is the OAuth 2.1 authorisation server for MCP clients — Google as the only social provider (offline access, encrypted tokens), JWT plugin, `mcp` plugin (resource = `${BETTER_AUTH_URL}/mcp`), and CIMD (client ID metadata documents; dynamic client registration is off). `/sign-in` and `/consent` (`createPages` in `packages/core/src/pages.ts`) verify Better Auth's signed query and render minimal HTML with strict CSP.
 
+Apple key building blocks for apps that sign requests with a user's own key (runtime-neutral, WebCrypto only, no `node:` imports; import as `@repo/core/signing` and `@repo/core/keys`): `packages/core/src/signing.ts` (`importP256PrivateKey` for a `.p8` PEM, `signEs256Jwt`) and `packages/core/src/keys.ts` (`encryptSecret`/`decryptSecret` on Better Auth's `secretConfig`, and `createKeyPages` — `keysPage` (`GET /keys`), `addKey` (`POST /keys`) and `removeKey` (`DELETE /keys/{id}`) over the app's own `KeyStore` table; strict CSP like `/sign-in`, and the writes additionally need a session and an `Origin` equal to the `BETTER_AUTH_URL` origin).
+
 Tool conventions (follow when adding a tool):
 - Zod 4 input schemas (`import * as z from "zod"`); shared ones such as `siteUrlSchema` live in `src/schemas/common.ts`.
 - Annotate `readOnlyHint: true`; `tests/server.test.ts` asserts the exact tool list and that every tool is read-only. The one exception is `submit_sitemap`, registered only with `createServer(getClient, { allowWrite: true })` (`GSC_ENABLE_WRITE=true`, which also swaps the Google scope to `webmasters`).
