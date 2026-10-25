@@ -10,7 +10,6 @@
         "BETTER_AUTH_URL",
         "GOOGLE_CLIENT_ID",
         "GOOGLE_CLIENT_SECRET",
-        "MCP_ALLOWED_ORIGINS",
         "GSC_ENABLE_WRITE",
         "LOG_LEVEL"
       ]

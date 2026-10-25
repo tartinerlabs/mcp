@@ -19,6 +19,13 @@ describe("handleMcp", () => {
     expect(await response.text()).toContain("submit_urls");
   });
 
+  it("should refuse a request from a web page", async () => {
+    const request = withHost("localhost");
+    request.headers.set("origin", "https://attacker.example");
+    const response = await handleMcp(request, workflow);
+    expect(response.status).toBe(403);
+  });
+
   it("should serve 2025-era clients", async () => {
     const response = await handleMcp(
       new Request("http://localhost/mcp", {

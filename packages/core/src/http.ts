@@ -18,13 +18,6 @@ export interface McpEndpointOptions {
   env?: Env;
 }
 
-function list(value: string | undefined): string[] {
-  return (value ?? "")
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
 /** The raw access token (Bearer or DPoP scheme) already verified by requireMcpAuth. */
 function presentedToken(request: Request): string {
   return (request.headers.get("authorization") ?? "").replace(/^\S+\s+/, "");
@@ -69,10 +62,8 @@ export function createMcpEndpoint({
   );
 
   return async (request) => {
-    const badOrigin = originValidationResponse(
-      request,
-      list(env.MCP_ALLOWED_ORIGINS),
-    );
+    // No allowlist: requests from web pages (with an Origin) are refused.
+    const badOrigin = originValidationResponse(request, []);
     if (badOrigin) return badOrigin;
     return authorised(request);
   };
