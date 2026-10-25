@@ -4,7 +4,7 @@ An unofficial [Model Context Protocol](https://modelcontextprotocol.io) (MCP) se
 
 The server runs as a stateless Streamable HTTP endpoint on Vercel. MCP clients connect with nothing but its URL, `https://<your-domain>/mcp`: on first use the client opens a browser, you sign in with Google and approve the client, and every tool call then runs as **your** Google account. Nothing needs to run on your machine.
 
-This repository is a pnpm workspace: the Search Console server lives in `apps/gsc`, a second server for PageSpeed Insights and the Chrome UX Report lives in `apps/pagespeed` (see [PageSpeed Insights server](#pagespeed-insights-server)), a third for IndexNow URL submission lives in `apps/index-now` (see [IndexNow server](#indexnow-server)), a fourth for read-only App Store Connect access lives in `apps/asc` (see [App Store Connect server](#app-store-connect-server)), and a fifth for ad-hoc App Store keyword research lives in `apps/aso` (see [ASO server](#aso-server)). Shared auth and HTTP code is in `packages/core`.
+This repository is a pnpm workspace: the Search Console server lives in `apps/gsc`, a second server for PageSpeed Insights and the Chrome UX Report lives in `apps/pagespeed` (see [PageSpeed Insights server](#pagespeed-insights-server)), a third for IndexNow URL submission lives in `apps/index-now` (see [IndexNow server](#indexnow-server)), and a fourth for read-only App Store Connect access lives in `apps/asc` (see [App Store Connect server](#app-store-connect-server)). Shared auth and HTTP code is in `packages/core`.
 
 > This project is not affiliated with, endorsed by or supported by Google. "Google" and "Search Console" are trademarks of Google LLC.
 
@@ -250,24 +250,6 @@ It runs on Cloudflare Workers with a D1 database, not Vercel. To deploy, create 
 
 ```sh
 pnpm --filter @tartinerlabs/app-store-connect-mcp types
-```
-
-## ASO server
-
-`apps/aso` does ad-hoc App Store keyword research from live, public App Store search results (the [iTunes Search API](https://performance-partners.apple.com/search-api), iPhone and universal apps). Like the IndexNow server it has no sign-in, no database and no key, and it stores nothing between calls.
-
-| Tool | What it does |
-| --- | --- |
-| `ping` | Checks that the server is running. |
-| `store_search` | Lists the top results for a term in one storefront: id, name, developer, bundle ID, genre, price, rating and rating count. Use it to find an app's numeric ID. |
-| `keyword_check` | For each phrase in each storefront, one live search: the app's rank in the top 200 (with `appId`), volume, difficulty and the top 5 apps. At most 20 searches (terms × countries) per call. |
-
-Volume (0–100) is how many of the top 50 apps have the phrase in their name: an estimate of how contested the phrase is, not a search count (Apple's search popularity is only available through Apple Search Ads). Difficulty (0–100) comes from the top 10 apps' rating counts on a log scale, where an average of a million ratings scores 100. Ranks from the Search API can differ by a few positions from what the App Store app shows. Apple allows about 20 searches a minute; a rate limit is reported as `[quota]`.
-
-It runs on Cloudflare Workers. To deploy, create a Worker named `aso-mcp` and connect this repository with git deployment (Workers Builds), *Root directory* `apps/aso`; `apps/aso/wrangler.jsonc` holds its settings. It serves on the Custom Domain `aso.mcp.tartinerlabs.com` (its `routes` entry; Cloudflare creates the DNS record and certificate); change the pattern to your own hostname. Under *Settings → Build → Build watch paths*, set *Include paths* to `apps/aso/*, packages/*, package.json, pnpm-lock.yaml, pnpm-workspace.yaml` and *Exclude paths* to `*.md`, so pushes that only touch other apps skip the build. No variables are required (`LOG_LEVEL` is optional). Because `/mcp` is open, add a Cloudflare rate-limiting rule on it. Then add it to Claude Code:
-
-```sh
-claude mcp add --scope user --transport http aso https://<your-deployment>/mcp
 ```
 
 ## Local development
