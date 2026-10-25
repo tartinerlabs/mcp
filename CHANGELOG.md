@@ -1,3 +1,10 @@
+# [0.11.0](https://github.com/tartinerlabs/mcp/compare/v0.10.1...v0.11.0) (2026-10-25)
+
+
+### Features
+
+* serve asc and index-now on mcp subdomains ([315d6b0](https://github.com/tartinerlabs/mcp/commit/315d6b0b65c93f6865175fa6e8b88cd230d66d11))
+
 ## [0.10.1](https://github.com/tartinerlabs/mcp/compare/v0.10.0...v0.10.1) (2026-10-25)
 
 
