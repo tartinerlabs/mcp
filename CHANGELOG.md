@@ -1,3 +1,17 @@
+# [0.10.0](https://github.com/tartinerlabs/mcp/compare/v0.9.0...v0.10.0) (2026-10-25)
+
+
+### Features
+
+* add App Store Connect MCP server on Workers ([aa65414](https://github.com/tartinerlabs/mcp/commit/aa6541440861961fc024bdb0860a7bd98a77fcb2)), closes [#28](https://github.com/tartinerlabs/mcp/issues/28)
+* add db:push script for asc ([289c2e5](https://github.com/tartinerlabs/mcp/commit/289c2e537a6ef5d6b17c2c7aede05d768dcdaaf8))
+* add initial asc migration ([be00a6b](https://github.com/tartinerlabs/mcp/commit/be00a6b70dbc71ce3bcec3f41422e1193fa20d4a))
+* add shared Apple key storage and signing ([5f3c72c](https://github.com/tartinerlabs/mcp/commit/5f3c72ce7ac4d4e106f81739a076a6c62b9f393d)), closes [#63](https://github.com/tartinerlabs/mcp/issues/63)
+* deploy asc with wrangler like index-now ([15b0311](https://github.com/tartinerlabs/mcp/commit/15b0311963186899052f25dd64d5a961ee0f6875))
+* drop allowed hosts vars from asc config ([5ffe3ff](https://github.com/tartinerlabs/mcp/commit/5ffe3ff3530a7d4355f4becfdea65f2e7e828f8d))
+* drop allowed origins var from asc config ([c70bca3](https://github.com/tartinerlabs/mcp/commit/c70bca36771f39c0a7111b6bdb61f5b83c101d43))
+* run core on Node and Cloudflare Workers ([b5884c8](https://github.com/tartinerlabs/mcp/commit/b5884c8c9dc07eb92f86f486cf31bf6308d09863)), closes [#41](https://github.com/tartinerlabs/mcp/issues/41)
+
 # [0.9.0](https://github.com/tartinerlabs/mcp/compare/v0.8.0...v0.9.0) (2026-10-22)
 
 
