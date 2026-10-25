@@ -22,7 +22,7 @@
       "head_sampling_rate": 1,
       "persist": true
     },
-    "issues": {
+    "issue_detection": {
       "enabled": true
     }
   },
@@ -41,7 +41,7 @@
         "head_sampling_rate": 1,
         "persist": true
       },
-      "issues": {
+      "issue_detection": {
         "enabled": true
       }
     }
