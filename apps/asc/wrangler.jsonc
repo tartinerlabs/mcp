@@ -1,0 +1,26 @@
+// Read by Cloudflare Workers Builds (git deployment); locally Wrangler only runs `wrangler types`.
+{
+  "name": "app-store-connect-mcp",
+  "main": "src/index.ts",
+  // nodejs_compat (on by default from 2026-08-04) populates process.env from vars and secrets.
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // @repo/core is consumed from its compiled dist/, so build it before the Worker is bundled.
+  "build": { "command": "pnpm --filter @repo/core build" },
+  "observability": { "enabled": true },
+  // Non-production branch builds run `wrangler preview`, which requires this block.
+  // Previews get no D1 binding, so sign-in and /keys only work in production.
+  "previews": {},
+  // BETTER_AUTH_URL and LOG_LEVEL are plain vars set in the dashboard, so deploys must keep them.
+  "keep_vars": true,
+  // No database_id: the first deploy provisions the database (automatic provisioning)
+  // and its id stays in the dashboard, so nothing account-specific is committed.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      // Drizzle Kit writes one folder per migration (drizzle/<name>/migration.sql).
+      "migrations_dir": "drizzle",
+      "migrations_pattern": "drizzle/*/migration.sql"
+    }
+  ]
+}

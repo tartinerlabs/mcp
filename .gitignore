@@ -12,4 +12,3 @@ client_secret*.json
 .claude/
 .agents/
 .grok/
-.cloudflare/

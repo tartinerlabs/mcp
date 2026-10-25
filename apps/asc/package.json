@@ -11,7 +11,8 @@
     "test:watch": "vitest",
     "auth:generate": "auth generate --output src/db/schema/auth.ts --yes",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "drizzle-kit migrate",
+    "types": "wrangler types"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "catalog:",
@@ -22,13 +23,12 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "2.0.0-beta.v.4",
     "@types/node": "catalog:",
     "auth": "catalog:",
-    "cf": "1.0.0-beta.10",
     "drizzle-kit": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "wrangler": "4.152.0"
   }
 }
