@@ -1,3 +1,4 @@
+import { fetchClientMetadataResource } from "@better-auth/cimd/node";
 import { createAuth } from "@repo/core/auth";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema/auth.ts";
@@ -12,4 +13,9 @@ export const WRITE_ENABLED = process.env.GSC_ENABLE_WRITE === "true";
 
 export const SCOPES = [WRITE_ENABLED ? WRITE_SCOPE : READ_SCOPE];
 
-export const auth = createAuth({ db, schema, scopes: SCOPES });
+export const auth = createAuth({
+  db,
+  schema,
+  scopes: SCOPES,
+  fetchClientMetadataResource,
+});

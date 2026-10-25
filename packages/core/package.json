@@ -12,7 +12,9 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@better-auth/cimd": "catalog:",
@@ -23,11 +25,12 @@
     "@modelcontextprotocol/server": "catalog:",
     "better-auth": "catalog:",
     "better-call": "1.4.2",
-    "drizzle-orm": "catalog:",
-    "pino": "10.4.0"
+    "drizzle-orm": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
   }
 }

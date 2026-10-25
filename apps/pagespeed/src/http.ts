@@ -7,5 +7,11 @@ import { logger } from "./utils/logger.ts";
 export const handleMcp = createMcpEndpoint({
   auth,
   logger,
+  // Vercel's system URLs, so deployment URLs pass Host validation.
+  allowedHosts: [
+    process.env.VERCEL_URL,
+    process.env.VERCEL_BRANCH_URL,
+    process.env.VERCEL_PROJECT_PRODUCTION_URL,
+  ],
   createServer: () => createServer(createPageSpeedClient),
 });

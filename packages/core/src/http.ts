@@ -6,14 +6,19 @@ import {
   type McpServer,
   originValidationResponse,
 } from "@modelcontextprotocol/server";
-import type { Logger } from "pino";
-import { type Auth, resource } from "./auth.ts";
+import { type Auth, mcpResource } from "./auth.ts";
+import { type Env, processEnv } from "./env.ts";
+import type { Logger } from "./logger.ts";
 
 export interface McpEndpointOptions {
   auth: Auth;
   logger: Logger;
   /** Builds a fresh server per request, acting as the token's user. */
   createServer: (authInfo: AuthInfo | undefined) => McpServer;
+  /** Extra hostnames accepted in the Host header, e.g. the platform's deployment URLs. */
+  allowedHosts?: (string | undefined)[];
+  /** @default process.env */
+  env?: Env;
 }
 
 function list(value: string | undefined): string[] {
@@ -22,15 +27,6 @@ function list(value: string | undefined): string[] {
     .map((item) => item.trim())
     .filter(Boolean);
 }
-
-/** Hostnames accepted in the Host header: the resource's, MCP_ALLOWED_HOSTS and Vercel's system URLs. */
-const allowedHostnames = [
-  new URL(resource).hostname,
-  ...list(process.env.MCP_ALLOWED_HOSTS),
-  ...list(process.env.VERCEL_URL),
-  ...list(process.env.VERCEL_BRANCH_URL),
-  ...list(process.env.VERCEL_PROJECT_PRODUCTION_URL),
-];
 
 /** The raw access token (Bearer or DPoP scheme) already verified by requireMcpAuth. */
 function presentedToken(request: Request): string {
@@ -45,7 +41,17 @@ export function createMcpEndpoint({
   auth,
   logger,
   createServer,
+  allowedHosts = [],
+  env = processEnv(),
 }: McpEndpointOptions): (request: Request) => Promise<Response> {
+  const resource = mcpResource(env);
+  /** Hostnames accepted in the Host header: the resource's, MCP_ALLOWED_HOSTS and `allowedHosts`. */
+  const allowedHostnames = [
+    new URL(resource).hostname,
+    ...list(env.MCP_ALLOWED_HOSTS),
+    ...allowedHosts.flatMap(list),
+  ];
+
   const handler = createMcpHandler((ctx) => createServer(ctx.authInfo), {
     // Only the 2026-07-28 protocol: @better-auth/mcp does not support 2025-era clients.
     legacy: "reject",
@@ -77,7 +83,7 @@ export function createMcpEndpoint({
     if (badHost) return badHost;
     const badOrigin = originValidationResponse(
       request,
-      list(process.env.MCP_ALLOWED_ORIGINS),
+      list(env.MCP_ALLOWED_ORIGINS),
     );
     if (badOrigin) return badOrigin;
     return authorised(request);

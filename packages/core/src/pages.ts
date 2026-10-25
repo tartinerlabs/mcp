@@ -1,7 +1,6 @@
-import { createHash } from "node:crypto";
 import { verifyOAuthQueryParams } from "@better-auth/oauth-provider";
-import type { Logger } from "pino";
 import type { Auth } from "./auth.ts";
+import type { Logger } from "./logger.ts";
 
 export interface PagesOptions {
   auth: Auth;
@@ -50,9 +49,15 @@ for (const button of document.querySelectorAll("button[data-accept]")) {
   });
 }
 `;
-const CONSENT_SCRIPT_HASH = createHash("sha256")
-  .update(CONSENT_SCRIPT)
-  .digest("base64");
+let consentScriptHash: Promise<string> | undefined;
+
+/** Base64 SHA-256 of CONSENT_SCRIPT for the CSP, computed once on first use. */
+function getConsentScriptHash(): Promise<string> {
+  consentScriptHash ??= crypto.subtle
+    .digest("SHA-256", new TextEncoder().encode(CONSENT_SCRIPT))
+    .then((digest) => btoa(String.fromCharCode(...new Uint8Array(digest))));
+  return consentScriptHash;
+}
 
 function page(
   status: number,
@@ -221,7 +226,7 @@ export function createPages({
 <p id="error" hidden>Something went wrong. Start again from your MCP client.</p>
 <p class="muted"><a href="/sign-in?${escapeHtml(oauthQuery)}">Use a different Google account</a></p>
 <script>${CONSENT_SCRIPT}</script>`,
-      CONSENT_SCRIPT_HASH,
+      await getConsentScriptHash(),
     );
   }
 

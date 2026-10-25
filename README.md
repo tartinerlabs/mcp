@@ -150,7 +150,7 @@ Vercel runs the Hono app in `apps/gsc/src/index.ts` as a single function ([Hono 
 | `MCP_ALLOWED_ORIGINS` | No | Comma-separated hostnames allowed in a browser `Origin` header on `/mcp` (requests without `Origin`, as sent by non-browser clients, pass). |
 | `CIMD_ALLOWED_HOSTS` | No | Comma-separated hostnames allowed to host client metadata documents (the `client_id` URL). Unset allows any host; set it, for example to `claude.ai`, to accept only clients you know. |
 | `GSC_ENABLE_WRITE` | No | `true` requests the `webmasters` write scope from Google and adds the `submit_sitemap` tool. Off by default. |
-| `LOG_LEVEL` | No | Pino level (`info` by default). Logs go to stderr; tokens, secrets, cookies and `Authorization` headers are redacted. |
+| `LOG_LEVEL` | No | Log level (`info` by default, `silent` to disable). Logs are JSON lines on stdout; tokens, secrets, cookies and `Authorization` headers are redacted. |
 
 ### Deploy
 

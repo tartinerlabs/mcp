@@ -22,6 +22,7 @@
     "script": "dev:app"
   },
   "dependencies": {
+    "@better-auth/cimd": "catalog:",
     "@googleapis/searchconsole": "11.0.1",
     "@modelcontextprotocol/server": "catalog:",
     "@neon/config": "catalog:",
