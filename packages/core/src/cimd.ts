@@ -37,8 +37,7 @@ async function resolve(
  * redirects are rejected rather than followed.
  *
  * Unlike `@better-auth/cimd/node`, it cannot pin the connection to the checked
- * address, so a DNS rebinding window remains: set CIMD_ALLOWED_HOSTS, which is
- * the stronger guard.
+ * address, so a DNS rebinding window remains.
  */
 export const fetchClientMetadataResource: ClientMetadataResourceFetch = async (
   input,
