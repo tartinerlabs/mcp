@@ -205,7 +205,8 @@ describe("key page", () => {
     for (const as of [undefined, "alice"]) {
       const response = await pages.keysPage(request("GET", "/keys", { as }));
       const html = await response.text();
-      const script = /<script>([\s\S]*)<\/script>/.exec(html)?.[1] as string;
+      const start = html.indexOf("<script>") + "<script>".length;
+      const script = html.slice(start, html.indexOf("</script>", start));
       const digest = await crypto.subtle.digest(
         "SHA-256",
         new TextEncoder().encode(script),
