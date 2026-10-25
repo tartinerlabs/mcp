@@ -50,9 +50,12 @@
   "keep_vars": true,
   // No database_id: the first deploy provisions the database (automatic provisioning)
   // and its id stays in the dashboard, so nothing account-specific is committed.
+  // database_name lets later deploys bind the existing database by name instead of
+  // trying to create it again when the deployed Worker has no DB binding yet.
   "d1_databases": [
     {
       "binding": "DB",
+      "database_name": "app-store-connect-mcp-db",
       // Drizzle Kit writes one folder per migration (drizzle/<name>/migration.sql).
       "migrations_dir": "drizzle",
       "migrations_pattern": "drizzle/*/migration.sql"
