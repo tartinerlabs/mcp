@@ -44,5 +44,7 @@
         "enabled": true
       }
     }
-  }
+  },
+  // Custom Domain: Cloudflare creates the DNS record and certificate.
+  "routes": [{ "pattern": "aso.mcp.tartinerlabs.com", "custom_domain": true }]
 }
