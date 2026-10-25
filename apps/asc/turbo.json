@@ -17,6 +17,13 @@
         "CLOUDFLARE_D1_DATABASE_ID",
         "CLOUDFLARE_API_TOKEN"
       ]
+    },
+    "db:push": {
+      "passThroughEnv": [
+        "CLOUDFLARE_ACCOUNT_ID",
+        "CLOUDFLARE_D1_DATABASE_ID",
+        "CLOUDFLARE_API_TOKEN"
+      ]
     }
   }
 }
