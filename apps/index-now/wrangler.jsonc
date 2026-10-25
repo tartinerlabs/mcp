@@ -46,6 +46,10 @@
       }
     }
   },
+  // Custom Domain: Cloudflare creates the DNS record and certificate.
+  "routes": [
+    { "pattern": "index-now.mcp.tartinerlabs.com", "custom_domain": true }
+  ],
   // submit_urls runs each submission as a durable Workflow instance that
   // retries while the key file goes live and when IndexNow rate-limits.
   "workflows": [
