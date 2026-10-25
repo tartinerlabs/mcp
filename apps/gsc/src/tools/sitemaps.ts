@@ -1,4 +1,12 @@
-import type { McpServer } from "@modelcontextprotocol/server";
+import {
+  acceptedContent,
+  CLIENT_CAPABILITIES_META_KEY,
+  type ClientCapabilities,
+  inputRequired,
+  inputResponse,
+  type McpServer,
+  type ServerContext,
+} from "@modelcontextprotocol/server";
 import * as z from "zod";
 import type { GscClientProvider } from "../google/client.ts";
 import {
@@ -59,6 +67,23 @@ export function registerSitemapsTool(
   );
 }
 
+const confirmationSchema = z.object({
+  confirm: z.boolean().describe("Submit the sitemap to Google."),
+});
+
+/** Whether the request's client declared form-mode elicitation (a bare `elicitation: {}` counts). */
+function supportsFormElicitation(ctx: ServerContext): boolean {
+  const envelope = ctx.mcpReq.envelope as Record<string, unknown> | undefined;
+  const capabilities = envelope?.[CLIENT_CAPABILITIES_META_KEY] as
+    | ClientCapabilities
+    | undefined;
+  const elicitation = capabilities?.elicitation;
+  return (
+    elicitation !== undefined &&
+    (elicitation.form !== undefined || elicitation.url === undefined)
+  );
+}
+
 export function registerSubmitSitemapTool(
   server: McpServer,
   getClient: GscClientProvider,
@@ -90,7 +115,38 @@ export function registerSubmitSitemapTool(
         openWorldHint: true,
       },
     },
-    async ({ siteUrl, sitemapUrl }) => {
+    async ({ siteUrl, sitemapUrl }, ctx) => {
+      // Ask the user to confirm the write when the client can show a form;
+      // other clients rely on their own tool-call approval.
+      if (supportsFormElicitation(ctx)) {
+        const responses = ctx.mcpReq.inputResponses;
+        if (inputResponse(responses, "confirm").kind === "missing") {
+          return inputRequired({
+            inputRequests: {
+              confirm: inputRequired.elicit({
+                message: `Submit ${sitemapUrl} to the Search Console property ${siteUrl}?`,
+                requestedSchema: confirmationSchema,
+              }),
+            },
+          });
+        }
+        const answer = acceptedContent(
+          responses,
+          "confirm",
+          confirmationSchema,
+        );
+        if (answer?.confirm !== true) {
+          const result = {
+            siteUrl,
+            sitemapUrl,
+            submitted: false,
+            note: "The user did not confirm the submission.",
+          };
+          return {
+            content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          };
+        }
+      }
       try {
         await (await getClient()).submitSitemap(siteUrl, sitemapUrl);
         const result = {

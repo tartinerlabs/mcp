@@ -1,4 +1,7 @@
-import { createMcpHandler } from "@modelcontextprotocol/server";
+import {
+  type ClientCapabilities,
+  createMcpHandler,
+} from "@modelcontextprotocol/server";
 import type { GscClient, GscClientProvider } from "../src/google/client.ts";
 import { createServer, type ServerOptions } from "../src/server.ts";
 
@@ -25,6 +28,7 @@ function mcpRequest(
   params: Record<string, unknown> = {},
   headers: Record<string, string> = {},
   url = "http://localhost/mcp",
+  clientCapabilities: ClientCapabilities = {},
 ): Request {
   const name = typeof params.name === "string" ? params.name : undefined;
   return new Request(url, {
@@ -45,7 +49,7 @@ function mcpRequest(
         ...params,
         _meta: {
           "io.modelcontextprotocol/protocolVersion": PROTOCOL_VERSION,
-          "io.modelcontextprotocol/clientCapabilities": {},
+          "io.modelcontextprotocol/clientCapabilities": clientCapabilities,
         },
       },
     }),
@@ -66,12 +70,17 @@ async function readMessage(response: Response) {
 export function createTestClient(
   getClient: GscClientProvider = mockClient(),
   options: ServerOptions = {},
+  clientCapabilities: ClientCapabilities = {},
 ) {
   const handler = createMcpHandler(() => createServer(getClient, options), {
     legacy: "reject",
   });
   const rpc = async (method: string, params: Record<string, unknown> = {}) =>
-    readMessage(await handler.fetch(mcpRequest(method, params)));
+    readMessage(
+      await handler.fetch(
+        mcpRequest(method, params, {}, undefined, clientCapabilities),
+      ),
+    );
   const callTool = async (name: string, args: Record<string, unknown> = {}) => {
     const message = await rpc("tools/call", { name, arguments: args });
     const text: string = message.result.content[0].text;

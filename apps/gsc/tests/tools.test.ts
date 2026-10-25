@@ -615,6 +615,63 @@ describe("submit_sitemap", () => {
     expect(submitSitemap).not.toHaveBeenCalled();
   });
 
+  describe("when the client supports elicitation", () => {
+    const args = {
+      siteUrl: "sc-domain:example.com",
+      sitemapUrl: "https://www.example.com/sitemap.xml",
+    };
+
+    function setup() {
+      const submitSitemap = vi.fn(async () => {});
+      const { rpc } = createTestClient(
+        mockClient({ submitSitemap }),
+        { allowWrite: true },
+        { elicitation: { form: {} } },
+      );
+      const call = (inputResponses?: Record<string, unknown>) =>
+        rpc("tools/call", {
+          name: "submit_sitemap",
+          arguments: args,
+          ...(inputResponses && { inputResponses }),
+        });
+      return { submitSitemap, call };
+    }
+
+    it("should ask the user to confirm before submitting", async () => {
+      const { submitSitemap, call } = setup();
+      const message = await call();
+      expect(message.result.resultType).toBe("input_required");
+      const request = message.result.inputRequests.confirm;
+      expect(request.method).toBe("elicitation/create");
+      expect(request.params.message).toContain(args.sitemapUrl);
+      expect(request.params.requestedSchema.properties.confirm.type).toBe(
+        "boolean",
+      );
+      expect(submitSitemap).not.toHaveBeenCalled();
+    });
+
+    it("should submit once the user confirms", async () => {
+      const { submitSitemap, call } = setup();
+      const message = await call({
+        confirm: { action: "accept", content: { confirm: true } },
+      });
+      expect(JSON.parse(message.result.content[0].text).submitted).toBe(true);
+      expect(submitSitemap).toHaveBeenCalledWith(args.siteUrl, args.sitemapUrl);
+    });
+
+    it.each([
+      ["declines", { action: "decline" }],
+      ["cancels", { action: "cancel" }],
+      ["unticks confirm", { action: "accept", content: { confirm: false } }],
+    ])("should not submit when the user %s", async (_, response) => {
+      const { submitSitemap, call } = setup();
+      const message = await call({ confirm: response });
+      expect(message.result.isError).not.toBe(true);
+      expect(JSON.parse(message.result.content[0].text).submitted).toBe(false);
+      expect(submitSitemap).not.toHaveBeenCalled();
+    });
+  });
+
   it("should surface a missing write scope as an auth error", async () => {
     const { callTool } = createTestClient(
       mockClient({
