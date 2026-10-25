@@ -7,10 +7,45 @@
   "compatibility_flags": ["nodejs_compat"],
   // @repo/core is consumed from its compiled dist/, so build it before the Worker is bundled.
   "build": { "command": "pnpm --filter @repo/core build" },
-  "observability": { "enabled": true },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "redact_query_string": false,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true,
+      "persist": true
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "persist": true
+    },
+    "issues": {
+      "enabled": true
+    }
+  },
   // Non-production branch builds run `wrangler preview`, which requires this block.
   // Previews get no Workflow binding, so submit_urls only works in production.
-  "previews": {},
+  "previews": {
+    "observability": {
+      "logs": {
+        "enabled": true,
+        "head_sampling_rate": 1,
+        "invocation_logs": true,
+        "persist": true
+      },
+      "traces": {
+        "enabled": true,
+        "head_sampling_rate": 1,
+        "persist": true
+      },
+      "issues": {
+        "enabled": true
+      }
+    }
+  },
   // submit_urls runs each submission as a durable Workflow instance that
   // retries while the key file goes live and when IndexNow rate-limits.
   "workflows": [
