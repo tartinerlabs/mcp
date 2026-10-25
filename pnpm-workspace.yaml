@@ -27,5 +27,6 @@ catalog:
 
 allowBuilds:
   esbuild: false
+  workerd: false
 
 savePrefix: ""

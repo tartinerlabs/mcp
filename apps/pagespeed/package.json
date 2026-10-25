@@ -16,6 +16,7 @@
     "db:push": "drizzle-kit push"
   },
   "dependencies": {
+    "@better-auth/cimd": "catalog:",
     "@modelcontextprotocol/server": "catalog:",
     "@neon/config": "catalog:",
     "@repo/core": "workspace:*",

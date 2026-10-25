@@ -4,7 +4,7 @@ An unofficial [Model Context Protocol](https://modelcontextprotocol.io) (MCP) se
 
 The server runs as a stateless Streamable HTTP endpoint on Vercel. MCP clients connect with nothing but its URL, `https://<your-domain>/mcp`: on first use the client opens a browser, you sign in with Google and approve the client, and every tool call then runs as **your** Google account. Nothing needs to run on your machine.
 
-This repository is a pnpm workspace: the Search Console server lives in `apps/gsc`, a second server for PageSpeed Insights and the Chrome UX Report lives in `apps/pagespeed` (see [PageSpeed Insights server](#pagespeed-insights-server)), and a third for IndexNow URL submission lives in `apps/index-now` (see [IndexNow server](#indexnow-server)). Shared auth and HTTP code is in `packages/core`.
+This repository is a pnpm workspace: the Search Console server lives in `apps/gsc`, a second server for PageSpeed Insights and the Chrome UX Report lives in `apps/pagespeed` (see [PageSpeed Insights server](#pagespeed-insights-server)), a third for IndexNow URL submission lives in `apps/index-now` (see [IndexNow server](#indexnow-server)), and a fourth for read-only App Store Connect access lives in `apps/asc` (see [App Store Connect server](#app-store-connect-server)). Shared auth and HTTP code is in `packages/core`.
 
 > This project is not affiliated with, endorsed by or supported by Google. "Google" and "Search Console" are trademarks of Google LLC.
 
@@ -146,11 +146,8 @@ Vercel runs the Hono app in `apps/gsc/src/index.ts` as a single function ([Hono 
 | `BETTER_AUTH_URL` | Yes | Public origin of the deployment, e.g. `https://gsc.example.com`. The MCP resource is `<BETTER_AUTH_URL>/mcp` and must be exactly the URL clients use. |
 | `GOOGLE_CLIENT_ID` | Yes | Web application OAuth client ID. |
 | `GOOGLE_CLIENT_SECRET` | Yes | Web application OAuth client secret. |
-| `MCP_ALLOWED_HOSTS` | No | Comma-separated extra hostnames accepted in the `Host` header of `/mcp`. The `BETTER_AUTH_URL` host and Vercel's `VERCEL_URL`, `VERCEL_BRANCH_URL` and `VERCEL_PROJECT_PRODUCTION_URL` are always accepted. |
-| `MCP_ALLOWED_ORIGINS` | No | Comma-separated hostnames allowed in a browser `Origin` header on `/mcp` (requests without `Origin`, as sent by non-browser clients, pass). |
-| `CIMD_ALLOWED_HOSTS` | No | Comma-separated hostnames allowed to host client metadata documents (the `client_id` URL). Unset allows any host; set it, for example to `claude.ai`, to accept only clients you know. |
 | `GSC_ENABLE_WRITE` | No | `true` requests the `webmasters` write scope from Google and adds the `submit_sitemap` tool. Off by default. |
-| `LOG_LEVEL` | No | Pino level (`info` by default). Logs go to stderr; tokens, secrets, cookies and `Authorization` headers are redacted. |
+| `LOG_LEVEL` | No | Log level (`info` by default, `silent` to disable). Logs are JSON lines on stdout; tokens, secrets, cookies and `Authorization` headers are redacted. |
 
 ### Deploy
 
@@ -227,10 +224,32 @@ The Chrome UX Report API allows 150 queries per minute per Google Cloud project.
 
 The server's instructions tell the client to use it only in projects that contain a key file (such as `public/<key>.txt`), and to submit only the production URLs that changed, once the deploy is live.
 
-It runs on Cloudflare Workers, not Vercel. To deploy, create a Worker named `index-now-mcp` and connect this repository with git deployment (Workers Builds), *Root directory* `apps/index-now`; `apps/index-now/wrangler.jsonc` holds its settings and builds `@repo/core` first. The same config registers the `index-now-submissions` Workflow, which runs each submission: it retries the key-file check while a deploy goes live, and the IndexNow POST on 5xx (honouring `Retry-After`) and network errors. A 429 ends the run with a `[quota]` error at once, because retrying a throttled host keeps it throttled. A Claude Code session moves a `submit_urls` call still running after two minutes to the background, so the agent keeps working until the outcome arrives. No variables are required. `MCP_ALLOWED_HOSTS` turns on Host header validation, and `MCP_ALLOWED_ORIGINS` and `LOG_LEVEL` work as for the other servers; set them under the Worker's *Variables and Secrets*. Because `/mcp` is open, add a Cloudflare rate-limiting rule on it. Then add it to Claude Code for every project:
+It runs on Cloudflare Workers, not Vercel. To deploy, create a Worker named `index-now-mcp` and connect this repository with git deployment (Workers Builds), *Root directory* `apps/index-now`; `apps/index-now/wrangler.jsonc` holds its settings and builds `@repo/core` first. The same config registers the `index-now-submissions` Workflow, which runs each submission: it retries the key-file check while a deploy goes live, and the IndexNow POST on 5xx (honouring `Retry-After`) and network errors. A 429 ends the run with a `[quota]` error at once, because retrying a throttled host keeps it throttled. A Claude Code session moves a `submit_urls` call still running after two minutes to the background, so the agent keeps working until the outcome arrives. No variables are required. `LOG_LEVEL` works as for the other servers; set it under the Worker's *Variables and Secrets*. Because `/mcp` is open, add a Cloudflare rate-limiting rule on it. Then add it to Claude Code for every project:
 
 ```sh
 claude mcp add --scope user --transport http index-now https://<your-deployment>/mcp
+```
+
+## App Store Connect server
+
+`apps/asc` gives read-only access to App Store Connect with the same Sign in with Google as the other servers (no extra Google scopes). There is no server-held Apple key: after signing in at `https://<your-deployment>/keys`, each user adds their own [App Store Connect API key](https://developer.apple.com/documentation/appstoreconnectapi/creating-api-keys-for-app-store-connect-api) (issuer ID for a team key, key ID and the `.p8` contents). Private keys are stored encrypted with `BETTER_AUTH_SECRET` and never shown again, and access follows the key's role in its own team. Every request is signed with a fresh 2-minute ES256 token. A user with several keys passes `key_id` to choose one.
+
+| Tool | What it does |
+| --- | --- |
+| `ping` | Checks that the server is running. |
+| `list_apps` | Apps visible to the key: id, name, bundle ID, SKU and primary locale. |
+| `app_versions` | An app's App Store versions, newest first, with their state and attached build number. |
+| `list_builds` | An app's builds, newest upload first: build number, marketing version, processing state and expiry. |
+| `customer_reviews` | Customer reviews filtered by star rating, territory and whether a response exists, with your response. |
+
+Each list tool returns one page (up to 200) and reports `hasMore`. A 429 from Apple is reported as `[quota]` at once, without retrying.
+
+It runs on Cloudflare Workers with a D1 database, not Vercel. To deploy, create a Worker named `app-store-connect-mcp` and connect this repository with git deployment (Workers Builds), *Root directory* `apps/asc`; `apps/asc/wrangler.jsonc` holds its settings and builds `@repo/core` first. Nothing account-specific is in the config: the `DB` binding has no database ID, so the first deploy provisions the D1 database and its ID stays in the dashboard. Previews (non-production branch builds) get no D1 binding, so sign-in and `/keys` only work in production. Under the Worker's *Variables and Secrets*, set `BETTER_AUTH_URL` as a plain variable and `BETTER_AUTH_SECRET`, `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` as secrets; `LOG_LEVEL` works as for the other servers. The config sets `keep_vars`, so deploys keep the plain variables set in the dashboard. Register `${BETTER_AUTH_URL}/api/auth/callback/google` as a redirect URI on the Google OAuth client.
+
+`apps/asc/worker-configuration.d.ts` holds the Worker's types, generated by Wrangler from `wrangler.jsonc`. Regenerate it after changing the config:
+
+```sh
+pnpm --filter @tartinerlabs/app-store-connect-mcp types
 ```
 
 ## Local development
@@ -256,7 +275,7 @@ Not verified yet: start the web UI with `pnpm dlx @modelcontextprotocol/inspecto
 ## Security considerations
 
 - Anyone who can sign in with Google can use the server, and each user only reads the Search Console properties **their own** Google account has access to. While the Google OAuth app is in *Testing*, only its listed test users can sign in.
-- Each MCP client must be approved on the consent page, which shows the client's name, the signed-in account and the host it will redirect to. Only approve clients you started yourself. Set `CIMD_ALLOWED_HOSTS` to refuse clients whose metadata document is hosted anywhere else.
+- Each MCP client must be approved on the consent page, which shows the client's name, the signed-in account and the host it will redirect to. Only approve clients you started yourself.
 - Only the read-only Search Console scope is requested from Google, unless you opt into `GSC_ENABLE_WRITE`; even then the only write tool is `submit_sitemap`. MCP access tokens are short-lived JWTs (1 hour) bound to the `/mcp` resource; refresh tokens rotate.
 - Google access and refresh tokens are encrypted at rest with a key derived from `BETTER_AUTH_SECRET`. Keep that secret and `DATABASE_URL` private; rotating the secret means everyone signs in again.
 - Tokens, secrets, cookies and `Authorization` headers are never logged or returned in tool results. Better Auth's own logger is set to `warn` and routed to Pino on stderr without its extra arguments.
