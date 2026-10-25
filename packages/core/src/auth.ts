@@ -29,15 +29,6 @@ export function mcpResource(env: Env = processEnv()): string {
   return new URL("/mcp", env.BETTER_AUTH_URL).href;
 }
 
-/** Whether a CIMD `client_id` URL is on an allowed host; an empty list allows any. */
-export function isMetadataDocumentUrlAllowed(
-  clientIdUrl: string,
-  allowedHosts: string[],
-): boolean {
-  if (allowedHosts.length === 0) return true;
-  return allowedHosts.includes(new URL(clientIdUrl).hostname.toLowerCase());
-}
-
 /**
  * Better Auth as the OAuth 2.1 authorisation server for MCP clients, with
  * Google as the only sign-in provider.
@@ -52,11 +43,6 @@ export function createAuth({
   backgroundTasks,
   env = processEnv(),
 }: AuthOptions) {
-  /** Hostnames allowed to host client metadata documents; empty allows any. */
-  const allowedMetadataHosts = (env.CIMD_ALLOWED_HOSTS ?? "")
-    .split(",")
-    .map((host) => host.trim().toLowerCase())
-    .filter(Boolean);
   return betterAuth({
     // Unset values fall back to Better Auth's own env reads, as before;
     // BETTER_AUTH_SECRETS (rotation) is still read by Better Auth itself.
@@ -98,8 +84,6 @@ export function createAuth({
       cimd({
         fetchClientMetadataResource,
         metadataProfile: "mcp-2026-07-28",
-        isMetadataDocumentUrlAllowed: (clientIdUrl) =>
-          isMetadataDocumentUrlAllowed(clientIdUrl, allowedMetadataHosts),
       }),
     ],
   });

@@ -11,9 +11,7 @@
         "GOOGLE_CLIENT_ID",
         "GOOGLE_CLIENT_SECRET",
         "GOOGLE_API_KEY",
-        "MCP_ALLOWED_HOSTS",
         "MCP_ALLOWED_ORIGINS",
-        "CIMD_ALLOWED_HOSTS",
         "LOG_LEVEL"
       ]
     }

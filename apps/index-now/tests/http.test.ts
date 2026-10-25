@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { handleMcp } from "../src/http.ts";
 import { mcpRequest } from "./helpers.ts";
-
-vi.stubEnv("MCP_ALLOWED_HOSTS", "localhost");
-const { handleMcp } = await import("../src/http.ts");
 
 const workflow = { create: vi.fn(), get: vi.fn() };
 
@@ -46,10 +44,5 @@ describe("handleMcp", () => {
     );
     expect(response.status).toBe(200);
     expect(await response.text()).toContain('"name":"index-now"');
-  });
-
-  it("should reject a Host that is not allowed", async () => {
-    const response = await handleMcp(withHost("attacker.example"), workflow);
-    expect(response.status).toBe(403);
   });
 });

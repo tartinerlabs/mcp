@@ -2,7 +2,6 @@ import { requireMcpAuth } from "@better-auth/mcp";
 import {
   type AuthInfo,
   createMcpHandler,
-  hostHeaderValidationResponse,
   type McpServer,
   originValidationResponse,
 } from "@modelcontextprotocol/server";
@@ -15,8 +14,6 @@ export interface McpEndpointOptions {
   logger: Logger;
   /** Builds a fresh server per request, acting as the token's user. */
   createServer: (authInfo: AuthInfo | undefined) => McpServer;
-  /** Extra hostnames accepted in the Host header, e.g. the platform's deployment URLs. */
-  allowedHosts?: (string | undefined)[];
   /** @default process.env */
   env?: Env;
 }
@@ -34,23 +31,16 @@ function presentedToken(request: Request): string {
 }
 
 /**
- * The MCP endpoint: Host/Origin validation, then Better Auth's
+ * The MCP endpoint: Origin validation, then Better Auth's
  * `requireMcpAuth`, then the stateless MCP handler acting as the token's user.
  */
 export function createMcpEndpoint({
   auth,
   logger,
   createServer,
-  allowedHosts = [],
   env = processEnv(),
 }: McpEndpointOptions): (request: Request) => Promise<Response> {
   const resource = mcpResource(env);
-  /** Hostnames accepted in the Host header: the resource's, MCP_ALLOWED_HOSTS and `allowedHosts`. */
-  const allowedHostnames = [
-    new URL(resource).hostname,
-    ...list(env.MCP_ALLOWED_HOSTS),
-    ...allowedHosts.flatMap(list),
-  ];
 
   const handler = createMcpHandler((ctx) => createServer(ctx.authInfo), {
     // Only the 2026-07-28 protocol: @better-auth/mcp does not support 2025-era clients.
@@ -79,8 +69,6 @@ export function createMcpEndpoint({
   );
 
   return async (request) => {
-    const badHost = hostHeaderValidationResponse(request, allowedHostnames);
-    if (badHost) return badHost;
     const badOrigin = originValidationResponse(
       request,
       list(env.MCP_ALLOWED_ORIGINS),

@@ -1,6 +1,5 @@
 import {
   createMcpHandler,
-  hostHeaderValidationResponse,
   originValidationResponse,
 } from "@modelcontextprotocol/server";
 import {
@@ -17,9 +16,6 @@ function list(value: string | undefined): string[] {
     .filter(Boolean);
 }
 
-/** Hostnames accepted in the Host header; unset accepts any, as a public Worker is not exposed to DNS rebinding. */
-const allowedHostnames = list(process.env.MCP_ALLOWED_HOSTS);
-
 /**
  * The MCP endpoint, open without sign-in: the site's key file is what
  * authorises a submission. Origin validation blocks cross-site browser requests.
@@ -28,10 +24,6 @@ export async function handleMcp(
   request: Request,
   workflow: SubmissionWorkflow,
 ): Promise<Response> {
-  if (allowedHostnames.length > 0) {
-    const badHost = hostHeaderValidationResponse(request, allowedHostnames);
-    if (badHost) return badHost;
-  }
   const badOrigin = originValidationResponse(
     request,
     list(process.env.MCP_ALLOWED_ORIGINS),

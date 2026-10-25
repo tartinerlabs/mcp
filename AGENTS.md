@@ -26,7 +26,7 @@ A stateless Streamable HTTP MCP server for read-only Google Search Console acces
 Request flow:
 
 1. `src/index.ts` — Hono app routing `/api/auth/*` and `/.well-known/*` to Better Auth, `POST /mcp` to `handleMcp`, and `/sign-in` + `/consent` to `src/pages.ts`.
-2. `src/http.ts` — `createMcpEndpoint` from `packages/core/src/http.ts`: Host/Origin validation (`MCP_ALLOWED_ORIGINS`, plus the Vercel system URLs the app passes as `allowedHosts`), then `requireMcpAuth` from `@better-auth/mcp` verifies the JWT access token and maps claims to `AuthInfo` with `extra.userId = sub`, then `createMcpHandler` builds a fresh `McpServer` per request.
+2. `src/http.ts` — `createMcpEndpoint` from `packages/core/src/http.ts`: Origin validation (`MCP_ALLOWED_ORIGINS`), then `requireMcpAuth` from `@better-auth/mcp` verifies the JWT access token and maps claims to `AuthInfo` with `extra.userId = sub`, then `createMcpHandler` builds a fresh `McpServer` per request.
 3. `src/server.ts` — `createServer(getClient)` registers `ping` plus one tool per file in `src/tools/`. Each `register*Tool(server, getClient)` takes a lazy `GscClientProvider` so credentials are resolved inside the tool call and auth failures surface as tool errors, not HTTP errors.
 4. `src/google/client.ts` — `getUserGscClient(userId)` loads the user's Google account via Better Auth's internal adapter, checks the `webmasters.readonly` scope was actually granted, gets/refreshes the Google access token via `auth.api.getAccessToken`, and wraps `@googleapis/searchconsole` behind the narrow `GscClient` interface (the seam tests mock).
 
