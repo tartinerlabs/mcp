@@ -32,13 +32,7 @@ export default defineConfig({
       BETTER_AUTH_SECRET: bindings.secret(),
       GOOGLE_CLIENT_ID: bindings.secret(),
       GOOGLE_CLIENT_SECRET: bindings.secret(),
-      ...vars([
-        "BETTER_AUTH_URL",
-        "MCP_ALLOWED_HOSTS",
-        "MCP_ALLOWED_ORIGINS",
-        "CIMD_ALLOWED_HOSTS",
-        "LOG_LEVEL",
-      ]),
+      ...vars(["BETTER_AUTH_URL", "MCP_ALLOWED_ORIGINS", "LOG_LEVEL"]),
     },
   },
 });

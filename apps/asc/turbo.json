@@ -8,9 +8,7 @@
         "BETTER_AUTH_URL",
         "GOOGLE_CLIENT_ID",
         "GOOGLE_CLIENT_SECRET",
-        "MCP_ALLOWED_HOSTS",
         "MCP_ALLOWED_ORIGINS",
-        "CIMD_ALLOWED_HOSTS",
         "LOG_LEVEL"
       ]
     },
