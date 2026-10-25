@@ -1,3 +1,12 @@
+# [0.12.0](https://github.com/tartinerlabs/mcp/compare/v0.11.0...v0.12.0) (2026-10-25)
+
+
+### Features
+
+* add App Store keyword research server ([04fd0df](https://github.com/tartinerlabs/mcp/commit/04fd0df289094c987256318ac40cad7148a95243))
+* document aso build watch paths ([c53066f](https://github.com/tartinerlabs/mcp/commit/c53066f5af9f50425be46183ea030fc5c5a6f2c7))
+* serve aso on a custom domain ([a1342e7](https://github.com/tartinerlabs/mcp/commit/a1342e75c38d51097f5d4f0cf589c31f23e677e9))
+
 # [0.11.0](https://github.com/tartinerlabs/mcp/compare/v0.10.1...v0.11.0) (2026-10-25)
 
 
