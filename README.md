@@ -4,7 +4,7 @@ An unofficial [Model Context Protocol](https://modelcontextprotocol.io) (MCP) se
 
 The server runs as a stateless Streamable HTTP endpoint on Vercel. MCP clients connect with nothing but its URL, `https://<your-domain>/mcp`: on first use the client opens a browser, you sign in with Google and approve the client, and every tool call then runs as **your** Google account. Nothing needs to run on your machine.
 
-This repository is a pnpm workspace: the Search Console server lives in `apps/gsc`, a second server for PageSpeed Insights and the Chrome UX Report lives in `apps/pagespeed` (see [PageSpeed Insights server](#pagespeed-insights-server)), and a third for IndexNow URL submission lives in `apps/index-now` (see [IndexNow server](#indexnow-server)). Shared auth and HTTP code is in `packages/core`.
+This repository is a pnpm workspace: the Search Console server lives in `apps/gsc`, a second server for PageSpeed Insights and the Chrome UX Report lives in `apps/pagespeed` (see [PageSpeed Insights server](#pagespeed-insights-server)), a third for IndexNow URL submission lives in `apps/index-now` (see [IndexNow server](#indexnow-server)), and a fourth for read-only App Store Connect access lives in `apps/asc` (see [App Store Connect server](#app-store-connect-server)). Shared auth and HTTP code is in `packages/core`.
 
 > This project is not affiliated with, endorsed by or supported by Google. "Google" and "Search Console" are trademarks of Google LLC.
 
@@ -229,6 +229,22 @@ It runs on Cloudflare Workers, not Vercel. To deploy, create a Worker named `ind
 ```sh
 claude mcp add --scope user --transport http index-now https://<your-deployment>/mcp
 ```
+
+## App Store Connect server
+
+`apps/asc` gives read-only access to App Store Connect with the same Sign in with Google as the other servers (no extra Google scopes). There is no server-held Apple key: after signing in at `https://<your-deployment>/keys`, each user adds their own [App Store Connect API key](https://developer.apple.com/documentation/appstoreconnectapi/creating-api-keys-for-app-store-connect-api) (issuer ID for a team key, key ID and the `.p8` contents). Private keys are stored encrypted with `BETTER_AUTH_SECRET` and never shown again, and access follows the key's role in its own team. Every request is signed with a fresh 2-minute ES256 token. A user with several keys passes `key_id` to choose one.
+
+| Tool | What it does |
+| --- | --- |
+| `ping` | Checks that the server is running. |
+| `list_apps` | Apps visible to the key: id, name, bundle ID, SKU and primary locale. |
+| `app_versions` | An app's App Store versions, newest first, with their state and attached build number. |
+| `list_builds` | An app's builds, newest upload first: build number, marketing version, processing state and expiry. |
+| `customer_reviews` | Customer reviews filtered by star rating, territory and whether a response exists, with your response. |
+
+Each list tool returns one page (up to 200) and reports `hasMore`. A 429 from Apple is reported as `[quota]` at once, without retrying.
+
+It runs on Cloudflare Workers with a D1 database, built with the [`cf` CLI](https://developers.cloudflare.com/cf/) from `apps/asc/cloudflare.config.ts` (`cf build` in `apps/asc`). Nothing account-specific is in the config: `WORKER_NAME`, `CLOUDFLARE_D1_DATABASE_ID`, `BETTER_AUTH_URL` and the optional variables come from the shell (a deploy replaces the Worker's plain vars, so the config refuses to build without `BETTER_AUTH_URL`; export the optional ones too), and `BETTER_AUTH_SECRET`, `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are Worker secrets. Register `${BETTER_AUTH_URL}/api/auth/callback/google` as a redirect URI on the Google OAuth client.
 
 ## Local development
 
