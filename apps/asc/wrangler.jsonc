@@ -46,6 +46,8 @@
       }
     }
   },
+  // Custom Domain: Cloudflare creates the DNS record and certificate. BETTER_AUTH_URL must match it.
+  "routes": [{ "pattern": "asc.mcp.tartinerlabs.com", "custom_domain": true }],
   // BETTER_AUTH_URL and LOG_LEVEL are plain vars set in the dashboard, so deploys must keep them.
   "keep_vars": true,
   // No database_id: the first deploy provisions the database (automatic provisioning)
