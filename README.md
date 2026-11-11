@@ -223,13 +223,12 @@ The Chrome UX Report API allows 150 queries per minute per Google Cloud project.
 
 The server's instructions tell the client to use it only in projects that contain a key file (such as `public/<key>.txt`), and to submit only the production URLs that changed, once the deploy is live.
 
-Unlike the other servers it runs locally over stdio, published to npm as `@tartinerlabs/index-now-mcp`. IndexNow permanently rate-limits the shared egress IPs of cloud platforms (it answered every submission from Cloudflare Workers with HTTP 429), so submissions must leave from the user's own IP. `submit_urls` retries the key-file check while a deploy goes live (about 16 minutes), and the IndexNow POST on 5xx (honouring `Retry-After`) and network errors. A 429 ends the call with a `[quota]` error at once, because retrying a throttled request keeps it throttled. A Claude Code session moves a `submit_urls` call still running after two minutes to the background, so the agent keeps working until the outcome arrives. No variables are required; `LOG_LEVEL` works as for the other servers, and logs go to stderr. Add it to Claude Code for every project:
+Unlike the other servers it runs locally over stdio, from a checkout of this repository. IndexNow permanently rate-limits the shared egress IPs of cloud platforms (it answered every submission from Cloudflare Workers with HTTP 429), so submissions must leave from the user's own IP. `submit_urls` retries the key-file check while a deploy goes live (about 16 minutes), and the IndexNow POST on 5xx (honouring `Retry-After`) and network errors. A 429 ends the call with a `[quota]` error at once, because retrying a throttled request keeps it throttled. A Claude Code session moves a `submit_urls` call still running after two minutes to the background, so the agent keeps working until the outcome arrives. No variables are required; `LOG_LEVEL` works as for the other servers, and logs go to stderr. Build it, then add it to Claude Code for every project:
 
 ```sh
-claude mcp add --scope user index-now -- pnpx @tartinerlabs/index-now-mcp
+pnpm --filter @tartinerlabs/index-now-mcp build
+claude mcp add --scope user index-now -- node "$PWD/apps/index-now/dist/index.js"
 ```
-
-semantic-release publishes it from CI on every release with npm trusted publishing (OIDC, `id-token: write`); the package's trusted publisher on npmjs.com must name this repository and `.github/workflows/ci.yml`.
 
 ## App Store Connect server
 
