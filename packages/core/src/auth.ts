@@ -2,7 +2,11 @@ import { cimd } from "@better-auth/cimd";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter/relations-v2";
 import { mcp } from "@better-auth/mcp";
 import type { ClientMetadataResourceFetch } from "@better-auth/oauth-provider";
-import { betterAuth } from "better-auth";
+import {
+  type BetterAuthOptions,
+  type BetterAuthPlugin,
+  betterAuth,
+} from "better-auth";
 import { jwt } from "better-auth/plugins";
 import { type Env, processEnv } from "./env.ts";
 
@@ -22,6 +26,10 @@ export interface AuthOptions {
   backgroundTasks?: (promise: Promise<unknown>) => void;
   /** @default process.env */
   env?: Env;
+  /** Extra Better Auth plugins, added after the built-in ones. */
+  plugins?: BetterAuthPlugin[];
+  /** Better Auth's `account.accountLinking`, e.g. to link a provider that returns no email. */
+  accountLinking?: NonNullable<BetterAuthOptions["account"]>["accountLinking"];
 }
 
 /** The MCP endpoint: the protected resource access tokens are bound to. */
@@ -42,6 +50,8 @@ export function createAuth({
   fetchClientMetadataResource,
   backgroundTasks,
   env = processEnv(),
+  plugins = [],
+  accountLinking,
 }: AuthOptions) {
   return betterAuth({
     // Unset values fall back to Better Auth's own env reads, as before;
@@ -63,7 +73,10 @@ export function createAuth({
         prompt: "select_account consent",
       },
     },
-    account: { encryptOAuthTokens: true },
+    account: {
+      encryptOAuthTokens: true,
+      ...(accountLinking && { accountLinking }),
+    },
     // A refreshed session cookie on /oauth2/authorize looks like a fresh
     // sign-in to the OAuth provider, which then skips `selectAccount` below.
     session: { disableSessionRefresh: true },
@@ -85,6 +98,7 @@ export function createAuth({
         fetchClientMetadataResource,
         metadataProfile: "mcp-2026-07-28",
       }),
+      ...plugins,
     ],
   });
 }
