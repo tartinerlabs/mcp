@@ -4,7 +4,7 @@ An unofficial [Model Context Protocol](https://modelcontextprotocol.io) (MCP) se
 
 The server runs as a stateless Streamable HTTP endpoint on Vercel. MCP clients connect with nothing but its URL, `https://<your-domain>/mcp`: on first use the client opens a browser, you sign in with Google and approve the client, and every tool call then runs as **your** Google account. Nothing needs to run on your machine.
 
-This repository is a pnpm workspace: the Search Console server lives in `apps/gsc`, a second server for PageSpeed Insights and the Chrome UX Report lives in `apps/pagespeed` (see [PageSpeed Insights server](#pagespeed-insights-server)), a third for IndexNow URL submission lives in `apps/index-now` (see [IndexNow server](#indexnow-server)), and a fourth for read-only App Store Connect access lives in `apps/asc` (see [App Store Connect server](#app-store-connect-server)). Shared auth and HTTP code is in `packages/core`.
+This repository is a pnpm workspace: the Search Console server lives in `apps/gsc`, a second server for PageSpeed Insights and the Chrome UX Report lives in `apps/pagespeed` (see [PageSpeed Insights server](#pagespeed-insights-server)), a third for IndexNow URL submission lives in `apps/index-now` (see [IndexNow server](#indexnow-server)), a fourth for read-only App Store Connect access lives in `apps/asc` (see [App Store Connect server](#app-store-connect-server)), and a fifth for read-only Bing Webmaster Tools access lives in `apps/bing` (see [Bing Webmaster Tools server](#bing-webmaster-tools-server)). Shared auth and HTTP code is in `packages/core`.
 
 > This project is not affiliated with, endorsed by or supported by Google. "Google" and "Search Console" are trademarks of Google LLC.
 
@@ -251,6 +251,28 @@ It runs on Cloudflare Workers with a D1 database, not Vercel. To deploy, create 
 ```sh
 pnpm --filter @tartinerlabs/app-store-connect-mcp types
 ```
+
+## Bing Webmaster Tools server
+
+`apps/bing` gives read-only access to Bing Webmaster Tools, with the same endpoint and deployment model as the Search Console server (Vercel and Neon). Signing in with Google only identifies you and requests no extra Google scopes. After signing in, each user connects their own Bing Webmaster account at `https://<your-deployment>/connect`, which sends them through Bing's own OAuth (scope `webmaster.read`, not Microsoft Entra). Bing tokens are stored encrypted per user and sent to Bing as a Bearer header. The same page reconnects or disconnects the account.
+
+| Tool | What it does |
+| --- | --- |
+| `ping` | Checks that the server is running. |
+| `list_sites` | Lists the sites in the connected Bing Webmaster account and whether each is verified. |
+| `url_info` | Bing's index details for one URL: discovery and last crawl dates, HTTP status seen, document size and inbound anchor count. |
+| `crawl_stats` | Daily crawl statistics for a site: pages crawled, crawl errors by cause, indexed pages and inbound links. |
+| `crawl_issues` | URLs on which Bing found crawl problems, with the HTTP code, inbound link count and Bing's issues flag value. |
+| `list_sitemaps` | Sitemaps and feeds submitted to Bing, with status, URL count, size and dates. |
+| `search_performance` | Impressions, clicks, click-through rate and average position on Bing, grouped by query or by page. |
+
+Setup differs from the Search Console server in three ways:
+
+1. In [Bing Webmaster Tools](https://www.bing.com/webmasters), open *Settings → API Access → OAuth Client* and register a client with the redirect URI `${BETTER_AUTH_URL}/api/auth/callback/bing` (HTTPS only). One client serves every user of the deployment; each user authorises their own account through it.
+2. Create a separate Vercel project with *Root Directory* `apps/bing`, with its own Neon database (migrations in `apps/bing/drizzle/`).
+3. Set the same environment variables as above, plus `BING_CLIENT_ID` and `BING_CLIENT_SECRET`. The Google OAuth client needs `${BETTER_AUTH_URL}/api/auth/callback/google` as a redirect URI and no extra scopes.
+
+Not yet verified against a real Bing sign-in: the account identifier read from the access token, token refresh, PKCE, and the response shapes and error codes of the Bing API. Bing's AI Performance report (Copilot citations) has no API, so the server shows whether pages are crawled and indexed by Bing, not how often AI answers cite them.
 
 ## Local development
 
