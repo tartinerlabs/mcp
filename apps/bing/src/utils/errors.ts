@@ -29,7 +29,7 @@ export class BingApiError extends Error {
   }
 }
 
-/** Thrown when fetch rejects; Workers reports connection failures as a bare TypeError without a code. */
+/** Thrown when fetch rejects, so connection failures classify as network errors. */
 export class NetworkError extends Error {
   override name = "NetworkError";
 }

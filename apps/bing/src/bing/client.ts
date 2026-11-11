@@ -8,7 +8,7 @@ import {
 } from "../utils/errors.ts";
 import { logger } from "../utils/logger.ts";
 
-/** The Better Auth instance; a type only, so importing this file never loads the Workers bindings. */
+/** The Better Auth instance; a type only, so importing this file never opens the database. */
 export type BingAuth = typeof appAuth;
 
 /** The WCF JSON endpoint; the host is still being confirmed, so it lives only here. */
@@ -114,8 +114,7 @@ export function createBingClient(
   accessToken: string,
   fetchImpl?: typeof fetch,
 ): BingClient {
-  // Not the bare global: Workers rejects `fetch` called with another `this`.
-  const send = fetchImpl ?? ((input, init) => fetch(input, init));
+  const send = fetchImpl ?? fetch;
 
   async function call<T>(
     method: string,
