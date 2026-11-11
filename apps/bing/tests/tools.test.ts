@@ -125,6 +125,17 @@ describe("crawl_issues", () => {
       { url: "b", httpCode: 500, inLinks: 9, issues: 4 },
     ]);
   });
+
+  it("should report a zero HTTP status as null", async () => {
+    const { provider } = mockClient({
+      getUrlInfo: async () => ({ Url: `${SITE}a`, HttpStatus: 0 }),
+    });
+    const result = await createTestClient(provider).callTool("url_info", {
+      siteUrl: SITE,
+      url: `${SITE}a`,
+    });
+    expect(JSON.parse(result.text).httpStatus).toBeNull();
+  });
 });
 
 describe("list_sitemaps", () => {
@@ -149,6 +160,27 @@ describe("list_sitemaps", () => {
       status: "Success",
       urlCount: 5,
       submittedAt: ISO,
+      lastCrawledAt: ISO,
+    });
+  });
+
+  it("should report an unset submission date and a zero size as null", async () => {
+    const { provider } = mockClient({
+      getFeeds: async () => [
+        {
+          Url: `${SITE}sitemap.xml`,
+          FileSize: 0,
+          Submitted: "/Date(-11644473600000)/",
+          LastCrawled: DATE,
+        },
+      ],
+    });
+    const result = await createTestClient(provider).callTool("list_sitemaps", {
+      siteUrl: SITE,
+    });
+    expect(JSON.parse(result.text).sitemaps[0]).toMatchObject({
+      fileSize: null,
+      submittedAt: null,
       lastCrawledAt: ISO,
     });
   });
