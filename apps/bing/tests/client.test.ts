@@ -108,6 +108,11 @@ describe("toIsoDate", () => {
     expect(toIsoDate("/Date(-86400000)/")).toBe("1969-12-31T00:00:00.000Z");
   });
 
+  it("should map Bing's unset date (1601-01-01) to null", () => {
+    expect(toIsoDate("/Date(-11644473600000)/")).toBeNull();
+    expect(toIsoDate("/Date(-11644473600000-0800)/")).toBeNull();
+  });
+
   it("should pass other strings through and map missing values to null", () => {
     expect(toIsoDate("2026-01-15")).toBe("2026-01-15");
     expect(toIsoDate(undefined)).toBeNull();

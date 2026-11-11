@@ -100,12 +100,16 @@ export interface BingClient {
  */
 export type BingClientProvider = () => BingClient | Promise<BingClient>;
 
-/** `/Date(ms)/` (or `/Date(ms+0000)/`) as an ISO 8601 string; anything else is passed through, `undefined` becomes null. */
+/** Bing sends 1601-01-01 (the Windows FILETIME epoch) for a date it has not set. */
+const UNSET_DATE_MS = Date.UTC(1601, 0, 1);
+
+/** `/Date(ms)/` (or `/Date(ms+0000)/`) as an ISO 8601 string; anything else is passed through, `undefined` and Bing's unset date become null. */
 export function toIsoDate(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const match = /^\/Date\((-?\d+)(?:[+-]\d{4})?\)\/$/.exec(value);
   if (!match?.[1]) return value;
   const date = new Date(Number(match[1]));
+  if (date.getTime() <= UNSET_DATE_MS) return null;
   return Number.isNaN(date.getTime()) ? value : date.toISOString();
 }
 
