@@ -1,3 +1,13 @@
+# [1.1.0](https://github.com/tartinerlabs/mcp/compare/v1.0.0...v1.1.0) (2026-11-11)
+
+
+### Features
+
+* add Bing Webmaster MCP server ([81ace5c](https://github.com/tartinerlabs/mcp/commit/81ace5c2f24ec45a38717acabaf07187b6cacfd0))
+* add initial Bing database migration ([1aeb0f0](https://github.com/tartinerlabs/mcp/commit/1aeb0f08abd621525e373f7bac8dc695ee498874))
+* document Bing MCP server ([7e4a886](https://github.com/tartinerlabs/mcp/commit/7e4a886cd9ee38b45cc040a0c3236a03fb7fd02f))
+* host Bing MCP on Vercel ([3a94d8f](https://github.com/tartinerlabs/mcp/commit/3a94d8f08068d6f38eb0b5ee22f1fe5a1f052e1f))
+
 # [1.0.0](https://github.com/tartinerlabs/mcp/compare/v0.12.0...v1.0.0) (2026-11-07)
 
 
