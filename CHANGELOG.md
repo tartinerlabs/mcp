@@ -1,3 +1,10 @@
+## [1.1.1](https://github.com/tartinerlabs/mcp/compare/v1.1.0...v1.1.1) (2026-11-11)
+
+
+### Bug Fixes
+
+* report Bing's unset values as null ([cc652ec](https://github.com/tartinerlabs/mcp/commit/cc652ecddf9a790b1e906cfce9281074104f1bee))
+
 # [1.1.0](https://github.com/tartinerlabs/mcp/compare/v1.0.0...v1.1.0) (2026-11-11)
 
 

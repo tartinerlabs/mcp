@@ -1,6 +1,6 @@
 {
   "name": "@tartinerlabs/index-now-mcp",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "description": "Unofficial Model Context Protocol server for IndexNow URL submission, run locally over stdio.",
   "license": "MIT",
