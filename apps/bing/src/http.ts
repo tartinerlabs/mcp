@@ -1,7 +1,7 @@
 import type { AuthInfo } from "@modelcontextprotocol/server";
 import { createMcpEndpoint } from "@repo/core/http";
 import { getUserBingClient } from "./bing/client.ts";
-import { auth, vars } from "./lib/auth.ts";
+import { auth } from "./lib/auth.ts";
 import { createServer } from "./server.ts";
 import { CredentialsError } from "./utils/errors.ts";
 import { logger } from "./utils/logger.ts";
@@ -16,12 +16,11 @@ function userIdOf(authInfo: AuthInfo | undefined): string {
   return userId;
 }
 
-const connectUrl = new URL("/connect", vars.BETTER_AUTH_URL).href;
+const connectUrl = new URL("/connect", process.env.BETTER_AUTH_URL).href;
 
 export const handleMcp = createMcpEndpoint({
   auth,
   logger,
-  env: vars,
   createServer: (authInfo) =>
     createServer(() => getUserBingClient(userIdOf(authInfo), auth, connectUrl)),
 });

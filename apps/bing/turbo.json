@@ -4,27 +4,15 @@
   "tasks": {
     "build": {
       "env": [
+        "DATABASE_URL",
+        "DATABASE_URL_UNPOOLED",
         "BETTER_AUTH_SECRET",
         "BETTER_AUTH_URL",
-        "BING_CLIENT_ID",
-        "BING_CLIENT_SECRET",
         "GOOGLE_CLIENT_ID",
         "GOOGLE_CLIENT_SECRET",
+        "BING_CLIENT_ID",
+        "BING_CLIENT_SECRET",
         "LOG_LEVEL"
-      ]
-    },
-    "db:migrate": {
-      "passThroughEnv": [
-        "CLOUDFLARE_ACCOUNT_ID",
-        "CLOUDFLARE_D1_DATABASE_ID",
-        "CLOUDFLARE_API_TOKEN"
-      ]
-    },
-    "db:push": {
-      "passThroughEnv": [
-        "CLOUDFLARE_ACCOUNT_ID",
-        "CLOUDFLARE_D1_DATABASE_ID",
-        "CLOUDFLARE_API_TOKEN"
       ]
     }
   }
