@@ -269,8 +269,8 @@ pnpm --filter @tartinerlabs/app-store-connect-mcp types
 Setup differs from the Search Console server in three ways:
 
 1. In [Bing Webmaster Tools](https://www.bing.com/webmasters), open *Settings → API Access → OAuth Client* and register a client with the redirect URI `${BETTER_AUTH_URL}/api/auth/callback/bing` (HTTPS only). One client serves every user of the deployment; each user authorises their own account through it.
-2. Create a separate Vercel project with *Root Directory* `apps/bing`, with its own Neon database (migrations in `apps/bing/drizzle/`).
-3. Set the same environment variables as above, plus `BING_CLIENT_ID` and `BING_CLIENT_SECRET`. The Google OAuth client needs `${BETTER_AUTH_URL}/api/auth/callback/google` as a redirect URI and no extra scopes.
+2. Create a separate Vercel project with *Root Directory* `apps/bing`, with its own Neon database (migrations in `apps/bing/drizzle/`). Set the project's *Framework Preset* to **Hono**: Vercel may auto-detect Vite, which serves the compiled files as a static site and returns `404` for every route.
+3. Set the same environment variables as above, plus `BING_CLIENT_ID` and `BING_CLIENT_SECRET`. `BETTER_AUTH_URL` must be the full origin including `https://` (for example `https://bing.example.com`, no trailing slash); without the scheme every request fails with `FUNCTION_INVOCATION_FAILED`. The Google OAuth client needs `${BETTER_AUTH_URL}/api/auth/callback/google` as a redirect URI and no extra scopes.
 
 Not yet verified against a real Bing sign-in: the account identifier read from the access token, token refresh, PKCE, and the response shapes and error codes of the Bing API. Bing's AI Performance report (Copilot citations) has no API, so the server shows whether pages are crawled and indexed by Bing, not how often AI answers cite them.
 
