@@ -29,7 +29,8 @@ export function registerSitemapsTool(
           type: feed.Type ?? null,
           status: feed.Status ?? null,
           urlCount: feed.UrlCount ?? null,
-          fileSize: feed.FileSize ?? null,
+          // Bing sends 0 when it has not recorded a size.
+          fileSize: feed.FileSize || null,
           compressed: feed.Compressed ?? null,
           submittedAt: toIsoDate(feed.Submitted),
           lastCrawledAt: toIsoDate(feed.LastCrawled),

@@ -29,7 +29,8 @@ export function registerUrlInfoTool(
           siteUrl,
           url: info?.Url ?? url,
           isPage: info?.IsPage ?? null,
-          httpStatus: info?.HttpStatus ?? null,
+          // Bing sends 0 when it has no status for the URL.
+          httpStatus: info?.HttpStatus || null,
           discoveredAt: toIsoDate(info?.DiscoveryDate),
           lastCrawledAt,
           documentSize: info?.DocumentSize ?? null,
