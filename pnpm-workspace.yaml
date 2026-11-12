@@ -16,6 +16,7 @@ catalog:
   "@vercel/functions": "3.9.11"
   auth: "1.7.10"
   better-auth: "1.7.10"
+  commander: "15.1.0"
   drizzle-kit: "1.0.0-rc.4"
   drizzle-orm: "1.0.0-rc.4"
   hono: "4.13.13"
