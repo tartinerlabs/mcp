@@ -2,7 +2,7 @@
   "name": "@tartinerlabs/index-now-mcp",
   "version": "1.1.1",
   "private": true,
-  "description": "Unofficial Model Context Protocol server for IndexNow URL submission, run locally over stdio.",
+  "description": "Unofficial command-line tool for IndexNow URL submission.",
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -11,7 +11,7 @@
     "directory": "apps/index-now"
   },
   "bin": {
-    "index-now-mcp": "dist/index.js"
+    "index-now": "dist/index.js"
   },
   "files": [
     "dist"
@@ -23,7 +23,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "catalog:",
+    "commander": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

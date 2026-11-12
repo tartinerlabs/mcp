@@ -13,18 +13,13 @@ export interface KeyFileResponse {
   text: string;
 }
 
-/** The operations the MCP tools depend on. */
+/** The operations the commands depend on. */
 export interface IndexNowClient {
   /** Fetches a key file without following redirects. */
   fetchKeyFile(url: string): Promise<KeyFileResponse>;
   /** Submits URLs and resolves the IndexNow status code (200 or 202). */
   submit(request: SubmitRequest): Promise<number>;
 }
-
-/** Resolves the client lazily, inside each tool call, as the other servers do. */
-export type IndexNowClientProvider = () =>
-  | IndexNowClient
-  | Promise<IndexNowClient>;
 
 // Shared endpoint: every participating search engine receives the submission.
 const INDEXNOW_URL = "https://api.indexnow.org/indexnow";
