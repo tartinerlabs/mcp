@@ -4,7 +4,7 @@ An unofficial [Model Context Protocol](https://modelcontextprotocol.io) (MCP) se
 
 The server runs as a stateless Streamable HTTP endpoint on Vercel. MCP clients connect with nothing but its URL, `https://<your-domain>/mcp`: on first use the client opens a browser, you sign in with Google and approve the client, and every tool call then runs as **your** Google account. Nothing needs to run on your machine.
 
-This repository is a pnpm workspace: the Search Console server lives in `apps/gsc`, a second server for PageSpeed Insights and the Chrome UX Report lives in `apps/pagespeed` (see [PageSpeed Insights server](#pagespeed-insights-server)), a third for read-only App Store Connect access lives in `apps/asc` (see [App Store Connect server](#app-store-connect-server)), a fourth for read-only Bing Webmaster Tools access lives in `apps/bing` (see [Bing Webmaster Tools server](#bing-webmaster-tools-server)), and a command-line tool for IndexNow URL submission lives in `apps/index-now` (see [IndexNow CLI](#indexnow-cli)). Shared auth and HTTP code is in `packages/core`.
+This repository is a pnpm workspace: the Search Console server lives in `apps/gsc`, a second server for PageSpeed Insights and the Chrome UX Report lives in `apps/pagespeed` (see [PageSpeed Insights server](#pagespeed-insights-server)), and a third for read-only Bing Webmaster Tools access lives in `apps/bing` (see [Bing Webmaster Tools server](#bing-webmaster-tools-server)). Two command-line tools run on your own machine: IndexNow URL submission in `apps/index-now` (see [IndexNow CLI](#indexnow-cli)) and read-only App Store Connect access in `apps/asc` (see [App Store Connect CLI](#app-store-connect-cli)). Shared auth and HTTP code is in `packages/core`.
 
 > This project is not affiliated with, endorsed by or supported by Google. "Google" and "Search Console" are trademarks of Google LLC.
 
@@ -232,26 +232,34 @@ node apps/index-now/dist/index.js verify https://example.com --key <key>
 node apps/index-now/dist/index.js submit https://example.com/new-page --key <key>
 ```
 
-## App Store Connect server
+## App Store Connect CLI
 
-`apps/asc` gives read-only access to App Store Connect with the same Sign in with Google as the other servers (no extra Google scopes). There is no server-held Apple key: after signing in at `https://<your-deployment>/keys`, each user adds their own [App Store Connect API key](https://developer.apple.com/documentation/appstoreconnectapi/creating-api-keys-for-app-store-connect-api) (issuer ID for a team key, key ID and the `.p8` contents). Private keys are stored encrypted with `BETTER_AUTH_SECRET` and never shown again, and access follows the key's role in its own team. Every request is signed with a fresh 2-minute ES256 token. A user with several keys passes `key_id` to choose one.
+`apps/asc` is a command-line tool, not an MCP server. It gives read-only access to App Store Connect with your own [App Store Connect API key](https://developer.apple.com/documentation/appstoreconnectapi/creating-api-keys-for-app-store-connect-api). There is no sign-in, database or hosted service: the key stays on your machine, access follows the key's role in its own team, and every request is signed with a fresh 2-minute ES256 token.
 
-| Tool | What it does |
+| Command | What it does |
 | --- | --- |
-| `ping` | Checks that the server is running. |
-| `list_apps` | Apps visible to the key: id, name, bundle ID, SKU and primary locale. |
-| `app_versions` | An app's App Store versions, newest first, with their state and attached build number. |
-| `list_builds` | An app's builds, newest upload first: build number, marketing version, processing state and expiry. |
-| `customer_reviews` | Customer reviews filtered by star rating, territory and whether a response exists, with your response. |
+| `apps` | Apps visible to the key: id, name, bundle ID, SKU and primary locale. |
+| `versions <app-id>` | An app's App Store versions, newest first, with their state and attached build number. |
+| `builds <app-id>` | An app's builds, newest upload first: build number, marketing version, processing state and expiry. |
+| `reviews <app-id>` | Customer reviews filtered by star rating, territory and whether a response exists, with your response. |
 
-Each list tool returns one page (up to 200) and reports `hasMore`. A 429 from Apple is reported as `[quota]` at once, without retrying.
+Each command returns one page (up to 200, `--limit`) and reports `hasMore`. A 429 from Apple is reported as `[quota]` at once, without retrying. Run a command with `--help` for its filters.
 
-It runs on Cloudflare Workers with a D1 database, not Vercel. To deploy, create a Worker named `app-store-connect-mcp` and connect this repository with git deployment (Workers Builds), *Root directory* `apps/asc`; `apps/asc/wrangler.jsonc` holds its settings and builds `@repo/core` first. It serves on the Custom Domain `asc.mcp.tartinerlabs.com` (its `routes` entry; Cloudflare creates the DNS record and certificate); change the pattern to your own hostname and set `BETTER_AUTH_URL` to exactly that origin. Apart from the hostname, nothing account-specific is in the config: the `DB` binding has no database ID, so the first deploy provisions the D1 database and its ID stays in the dashboard. Previews (non-production branch builds) get no D1 binding, so sign-in and `/keys` only work in production. Under the Worker's *Variables and Secrets*, set `BETTER_AUTH_URL` as a plain variable and `BETTER_AUTH_SECRET`, `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` as secrets; `LOG_LEVEL` works as for the other servers. The config sets `keep_vars`, so deploys keep the plain variables set in the dashboard. Register `${BETTER_AUTH_URL}/api/auth/callback/google` as a redirect URI on the Google OAuth client.
+The key comes from options, or from environment variables when an option is not given. Nothing is stored: the `.p8` file is read on each run.
 
-`apps/asc/worker-configuration.d.ts` holds the Worker's types, generated by Wrangler from `wrangler.jsonc`. Regenerate it after changing the config:
+| Option | Variable | Value |
+| --- | --- | --- |
+| `--key-id` | `ASC_KEY_ID` | The key ID, such as `2X9R4HXF34`. |
+| `--issuer-id` | `ASC_ISSUER_ID` | The issuer ID, for a team key. Leave it out for an individual key. |
+| `--private-key` | `ASC_PRIVATE_KEY_PATH` | Path to the key's `.p8` file. |
+
+The result is printed as JSON on stdout. Errors go to stderr, and a failure exits with code 1. Build it, then run it:
 
 ```sh
-pnpm --filter @tartinerlabs/app-store-connect-mcp types
+pnpm --filter @tartinerlabs/app-store-connect-mcp build
+export ASC_KEY_ID=<key id> ASC_ISSUER_ID=<issuer id> ASC_PRIVATE_KEY_PATH=<path to AuthKey.p8>
+node apps/asc/dist/index.js apps
+node apps/asc/dist/index.js reviews <app-id> --rating 1,2
 ```
 
 ## Bing Webmaster Tools server

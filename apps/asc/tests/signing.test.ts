@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { importP256PrivateKey, signEs256Jwt } from "../src/signing.ts";
+import { importP256PrivateKey, signEs256Jwt } from "../src/asc/signing.ts";
 import { generateP256Pem } from "./helpers.ts";
 
 function bytes(part: string): Uint8Array<ArrayBuffer> {

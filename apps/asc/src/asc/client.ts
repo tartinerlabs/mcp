@@ -1,17 +1,11 @@
-import {
-  decryptSecret,
-  type KeyRecord,
-  type KeyStore,
-  type SecretAuth,
-} from "@repo/core/keys";
-import { importP256PrivateKey, signEs256Jwt } from "@repo/core/signing";
-import type { AscKeyFields } from "../schemas/common.ts";
+import type { AscKey } from "../schemas/common.ts";
 import {
   AscApiError,
   CredentialsError,
   NetworkError,
   UnexpectedResponseError,
 } from "../utils/errors.ts";
+import { importP256PrivateKey, signEs256Jwt } from "./signing.ts";
 
 /** One JSON:API resource; `attributes` is shaped by the endpoint. */
 export interface AscResource<Attributes = Record<string, unknown>> {
@@ -38,26 +32,12 @@ export type AscQuery = Record<
   string | number | boolean | readonly string[] | undefined
 >;
 
-/** The App Store Connect operation the MCP tools depend on. */
+/** The App Store Connect operation the commands depend on. */
 export interface AscClient {
   get<T>(path: string, query?: AscQuery): Promise<T>;
 }
 
-/**
- * Resolves the client lazily, inside each tool call, so a missing key surfaces
- * as a tool error rather than an HTTP error.
- */
-export type AscClientProvider = (
-  keyId: string | undefined,
-) => AscClient | Promise<AscClient>;
-
-export type AscKey = KeyRecord<AscKeyFields>;
-
-export interface UserKeyAccess {
-  store: Pick<KeyStore<AscKeyFields>, "list">;
-  auth: SecretAuth;
-  /** The key management page, named in "add a key" errors. */
-  keysUrl: string;
+export interface AscClientOptions {
   fetch?: typeof fetch;
   /** @default Date.now */
   now?: () => number;
@@ -69,35 +49,6 @@ const AUDIENCE = "appstoreconnect-v1";
 const TOKEN_LIFETIME_S = 120;
 const TIMEOUT_MS = 30_000;
 
-function describeKey(key: AscKey): string {
-  return `${key.keyId} (${key.issuerId ? "team" : "individual"})`;
-}
-
-/** The key to use: the only one, or the one matching `keyId`. */
-export function selectKey(
-  keys: AscKey[],
-  keyId: string | undefined,
-  keysUrl: string,
-): AscKey {
-  if (keys.length === 0) {
-    throw new CredentialsError(
-      `No App Store Connect API key is stored for your account. Add one at ${keysUrl}, then retry.`,
-    );
-  }
-  if (keyId !== undefined) {
-    const key = keys.find((candidate) => candidate.keyId === keyId);
-    if (key) return key;
-    throw new CredentialsError(
-      `No stored key has key ID ${keyId}. Your keys: ${keys.map(describeKey).join(", ")}. Manage them at ${keysUrl}.`,
-    );
-  }
-  const [only] = keys;
-  if (keys.length === 1 && only) return only;
-  throw new CredentialsError(
-    `You have ${keys.length} App Store Connect keys: ${keys.map(describeKey).join(", ")}. Pass key_id to choose one.`,
-  );
-}
-
 /** A team key names its issuer; an individual key uses `sub: "user"` instead. */
 export function tokenClaims(
   key: Pick<AscKey, "issuerId">,
@@ -108,25 +59,19 @@ export function tokenClaims(
   return { ...subject, iat, exp: iat + TOKEN_LIFETIME_S, aud: AUDIENCE };
 }
 
-/** Signs a fresh ES256 token for every request with the user's chosen key. */
-export async function getUserAscClient(
-  userId: string,
-  keyId: string | undefined,
-  { store, auth, keysUrl, fetch: fetchImpl, now = Date.now }: UserKeyAccess,
+/** Signs a fresh ES256 token for every request with the given key. */
+export async function createAscClient(
+  key: AscKey,
+  { fetch: send = fetch, now = Date.now }: AscClientOptions = {},
 ): Promise<AscClient> {
-  const key = selectKey(await store.list(userId), keyId, keysUrl);
   let signingKey: CryptoKey;
   try {
-    signingKey = await importP256PrivateKey(
-      await decryptSecret(auth, key.privateKey),
-    );
+    signingKey = await importP256PrivateKey(key.privateKey);
   } catch {
     throw new CredentialsError(
-      `The stored key ${key.keyId} could not be read. Remove it and add it again at ${keysUrl}.`,
+      "The private key file is not a valid .p8 key: expected the unencrypted file downloaded from App Store Connect.",
     );
   }
-  // Not the bare global: Workers rejects `fetch` called with another `this`.
-  const send = fetchImpl ?? ((input, init) => fetch(input, init));
 
   return {
     async get<T>(path: string, query: AscQuery = {}): Promise<T> {
