@@ -5,50 +5,44 @@ const KEY_ID_PATTERN = /^[A-Z0-9]{10}$/;
 const GUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const keyId = z
-  .string()
-  .trim()
-  .max(10)
-  .regex(KEY_ID_PATTERN, "Must be a 10-character key ID such as 2X9R4HXF34.");
-
-/** The /keys form: Apple's issuer ID (team keys), key ID and `.p8` contents. */
-export const keyFormSchema = z.object({
+/** An App Store Connect API key: a team key names its issuer, an individual key does not. */
+export const keySchema = z.object({
+  keyId: z
+    .string()
+    .trim()
+    .regex(
+      KEY_ID_PATTERN,
+      "The key ID must be 10 characters such as 2X9R4HXF34.",
+    ),
   issuerId: z
     .string()
     .trim()
-    .max(36)
     .refine((value) => value === "" || GUID_PATTERN.test(value), {
-      message: "Must be the issuer ID shown above the team's keys.",
+      message: "The issuer ID must be the one shown above the team's keys.",
     })
-    .default("")
-    .describe("Issuer ID (team keys only; leave empty for an individual key)"),
-  keyId: keyId.describe("Key ID"),
-  privateKey: z
-    .string()
-    .max(4096)
-    .describe("Private key (the contents of the .p8 file)"),
+    .default(""),
+  /** The contents of the `.p8` file. */
+  privateKey: z.string(),
 });
 
-export type AscKeyFields = z.output<typeof keyFormSchema>;
-
-export const keyIdSchema = keyId
-  .optional()
-  .describe(
-    "Key ID of the stored App Store Connect API key to use. Needed only when you have stored more than one.",
-  );
+export type AscKey = z.output<typeof keySchema>;
 
 export const appIdSchema = z
   .string()
   .trim()
-  .regex(/^\d{1,20}$/, "Must be a numeric App Store Connect app ID.")
-  .describe("App Store Connect app ID (the numeric id from list_apps).");
+  .regex(/^\d{1,20}$/, "Must be a numeric App Store Connect app ID.");
 
-export const limitSchema = z
-  .number()
-  .int()
-  .min(1)
-  .max(200)
-  .default(50)
-  .describe("Maximum number of results (1-200, default 50).");
+export const limitSchema = z.coerce.number().int().min(1).max(200).default(50);
+
+/** A comma-separated option value, such as `IN_REVIEW,REJECTED`. */
+export function commaList<T extends z.ZodType>(item: T) {
+  return z.preprocess(
+    (value) =>
+      typeof value === "string"
+        ? value.split(",").map((part) => part.trim())
+        : value,
+    z.array(item).min(1).optional(),
+  );
+}
 
 export const PLATFORMS = ["IOS", "MAC_OS", "TV_OS", "VISION_OS"] as const;

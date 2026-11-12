@@ -1,6 +1,3 @@
-import type { CallToolResult } from "@modelcontextprotocol/server";
-import { logger } from "./logger.ts";
-
 type ErrorKind =
   | "invalid_input"
   | "auth"
@@ -11,7 +8,7 @@ type ErrorKind =
   | "network"
   | "unexpected";
 
-/** Thrown when the user has no usable App Store Connect key, or several and no key_id. */
+/** Thrown when no usable App Store Connect key was given. */
 export class CredentialsError extends Error {
   override name = "CredentialsError";
 }
@@ -29,7 +26,7 @@ export class AscApiError extends Error {
   }
 }
 
-/** Thrown when fetch rejects; Workers reports connection failures as a bare TypeError without a code. */
+/** Thrown when fetch rejects, which may be a bare TypeError without a code. */
 export class NetworkError extends Error {
   override name = "NetworkError";
 }
@@ -136,16 +133,14 @@ export function classifyError(error: unknown): ClassifiedError {
         kind: "auth",
         message:
           "App Store Connect rejected the API key: it may be revoked, or its issuer ID or key ID does not match the private key. " +
-          "Replace it on this server's /keys page.",
+          "Check --key-id, --issuer-id and --private-key (or the ASC_* variables).",
       };
     }
     if (status === 403 || hasPrefix(code, "FORBIDDEN_ERROR")) {
       return {
         ...base,
         kind: "permission",
-        message:
-          "App Store Connect refused this request: the API key's role may not allow it, or the key may be revoked or malformed " +
-          `(replace it on this server's /keys page).${appleDetail(detail)}`,
+        message: `App Store Connect refused this request: the API key's role may not allow it, or the key may be revoked.${appleDetail(detail)}`,
       };
     }
     if (
@@ -156,7 +151,7 @@ export function classifyError(error: unknown): ClassifiedError {
       return {
         ...base,
         kind: "not_found",
-        message: `App Store Connect found no such resource; check the app_id with list_apps.${appleDetail(detail)}`,
+        message: `App Store Connect found no such resource; check the app ID with the apps command.${appleDetail(detail)}`,
       };
     }
     if (
@@ -194,28 +189,6 @@ export function classifyError(error: unknown): ClassifiedError {
 
   return {
     kind: "unexpected",
-    message:
-      "Unexpected error while calling App Store Connect. Check the server logs for details.",
-  };
-}
-
-/** Convert an error into an MCP tool result with `isError: true`, logging only non-sensitive fields. */
-export function toToolError(tool: string, error: unknown): CallToolResult {
-  const classified = classifyError(error);
-  logger.warn(
-    {
-      tool,
-      kind: classified.kind,
-      status: classified.status,
-      reason: classified.reason,
-      errorName: error instanceof Error ? error.name : typeof error,
-    },
-    "tool call failed",
-  );
-  return {
-    isError: true,
-    content: [
-      { type: "text", text: `[${classified.kind}] ${classified.message}` },
-    ],
+    message: "Unexpected error while calling App Store Connect.",
   };
 }

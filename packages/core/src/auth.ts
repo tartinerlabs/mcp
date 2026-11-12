@@ -20,7 +20,7 @@ export interface AuthOptions {
   provider?: "pg" | "sqlite";
   /** @default true for "pg", false for "sqlite" (D1 rejects BEGIN) */
   transaction?: boolean;
-  /** CIMD metadata transport: `@better-auth/cimd/node` on Node, `@repo/core/cimd` on Workers. */
+  /** CIMD metadata transport, such as `@better-auth/cimd/node` on Node. */
   fetchClientMetadataResource: ClientMetadataResourceFetch;
   /** Keeps background work alive after the response, e.g. a Worker's `waitUntil`. */
   backgroundTasks?: (promise: Promise<unknown>) => void;

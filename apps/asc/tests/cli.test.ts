@@ -1,9 +1,38 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AscClient } from "../src/asc/client.ts";
+import { type AscClientProvider, createProgram } from "../src/cli.ts";
 import { AscApiError, CredentialsError } from "../src/utils/errors.ts";
-import { createTestClient, mockClient } from "./helpers.ts";
 
+/** A spied provider and client whose `get` resolves the given body. */
 function respond(body: unknown) {
-  return mockClient(() => Promise.resolve(body as never));
+  const client: AscClient = {
+    get: vi.fn(() => Promise.resolve(body)) as AscClient["get"],
+  };
+  const provider = vi.fn<AscClientProvider>(() => client);
+  return { client, provider };
+}
+
+/** Runs the CLI, capturing stdout, stderr and the exit code. */
+async function run(args: string[], provider: AscClientProvider) {
+  let stderr = "";
+  const program = createProgram(provider);
+  // Subcommands inherit both settings when they are created, so set them on each.
+  for (const command of [program, ...program.commands]) {
+    command.exitOverride().configureOutput({
+      writeErr: (text) => {
+        stderr += text;
+      },
+    });
+  }
+  const exitCode = await program
+    .parseAsync(args, { from: "user" })
+    .then(() => 0)
+    .catch((error: { exitCode?: number }) => error.exitCode ?? 1);
+  const stdout = vi
+    .mocked(console.log)
+    .mock.calls.map(([text]) => text)
+    .join("\n");
+  return { exitCode, stdout, stderr };
 }
 
 const empty = {
@@ -11,7 +40,15 @@ const empty = {
   links: { self: "https://api.appstoreconnect.apple.com/v1/x" },
 };
 
-describe("list_apps", () => {
+beforeEach(() => {
+  vi.spyOn(console, "log").mockImplementation(() => {});
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("apps", () => {
   it("should pass filters, sort and limit and shape each app", async () => {
     const { client, provider } = respond({
       data: [
@@ -33,15 +70,21 @@ describe("list_apps", () => {
       },
       meta: { paging: { total: 3, limit: 1 } },
     });
-    const { callTool } = createTestClient(provider);
-    const result = await callTool("list_apps", {
-      bundle_id: "com.example.app",
-      sort: "-name",
-      limit: 1,
-      key_id: "ABCDE12345",
-    });
-    expect(result.isError).toBe(false);
-    expect(provider).toHaveBeenCalledWith("ABCDE12345");
+    const result = await run(
+      [
+        "apps",
+        "--bundle-id",
+        "com.example.app",
+        "--sort=-name",
+        "--limit",
+        "1",
+        "--key-id",
+        "ABCDE12345",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(provider).toHaveBeenCalledWith({ keyId: "ABCDE12345" });
     expect(client.get).toHaveBeenCalledWith("/v1/apps", {
       "filter[name]": undefined,
       "filter[bundleId]": "com.example.app",
@@ -49,7 +92,7 @@ describe("list_apps", () => {
       "fields[apps]": ["name", "bundleId", "sku", "primaryLocale"],
       limit: 1,
     });
-    expect(JSON.parse(result.text)).toEqual({
+    expect(JSON.parse(result.stdout)).toEqual({
       apps: [
         {
           id: "1234567890",
@@ -64,19 +107,40 @@ describe("list_apps", () => {
     });
   });
 
-  it("should default to sorting by name, 50 at a time, with the only key", async () => {
+  it("should default to sorting by name, 50 at a time", async () => {
     const { client, provider } = respond(empty);
-    const result = await createTestClient(provider).callTool("list_apps");
-    expect(JSON.parse(result.text)).toEqual({ apps: [], hasMore: false });
-    expect(provider).toHaveBeenCalledWith(undefined);
+    const result = await run(["apps"], provider);
+    expect(JSON.parse(result.stdout)).toEqual({ apps: [], hasMore: false });
+    expect(provider).toHaveBeenCalledWith({});
     expect(client.get).toHaveBeenCalledWith(
       "/v1/apps",
       expect.objectContaining({ sort: "name", limit: 50 }),
     );
   });
+
+  it("should accept the key options before the command", async () => {
+    const { provider } = respond(empty);
+    await run(
+      [
+        "--key-id",
+        "ABCDE12345",
+        "--issuer-id",
+        "issuer",
+        "--private-key",
+        "AuthKey.p8",
+        "apps",
+      ],
+      provider,
+    );
+    expect(provider).toHaveBeenCalledWith({
+      keyId: "ABCDE12345",
+      issuerId: "issuer",
+      privateKey: "AuthKey.p8",
+    });
+  });
 });
 
-describe("app_versions", () => {
+describe("versions", () => {
   it("should include the build, filter by state and sort newest first", async () => {
     const { client, provider } = respond({
       data: [
@@ -111,12 +175,17 @@ describe("app_versions", () => {
       included: [{ type: "builds", id: "b1", attributes: { version: "42" } }],
       links: { self: "x" },
     });
-    const { callTool } = createTestClient(provider);
-    const result = await callTool("app_versions", {
-      app_id: "1234567890",
-      platform: "IOS",
-      app_version_state: ["IN_REVIEW", "READY_FOR_DISTRIBUTION"],
-    });
+    const result = await run(
+      [
+        "versions",
+        "1234567890",
+        "--platform",
+        "IOS",
+        "--state",
+        "IN_REVIEW,READY_FOR_DISTRIBUTION",
+      ],
+      provider,
+    );
     expect(client.get).toHaveBeenCalledWith(
       "/v1/apps/1234567890/appStoreVersions",
       expect.objectContaining({
@@ -128,7 +197,7 @@ describe("app_versions", () => {
         limit: 50,
       }),
     );
-    const { versions } = JSON.parse(result.text);
+    const { versions } = JSON.parse(result.stdout);
     expect(versions.map((v: { id: string }) => v.id)).toEqual(["v2", "v1"]);
     expect(versions[0].build).toBeUndefined();
     expect(versions[1]).toEqual({
@@ -143,9 +212,20 @@ describe("app_versions", () => {
       build: "42",
     });
   });
+
+  it("should reject an unknown state without calling App Store Connect", async () => {
+    const { client, provider } = respond(empty);
+    const result = await run(
+      ["versions", "1234567890", "--state", "LIVE"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.get).not.toHaveBeenCalled();
+  });
 });
 
-describe("list_builds", () => {
+describe("builds", () => {
   it("should query newest uploads with the pre-release version", async () => {
     const { client, provider } = respond({
       data: [
@@ -177,14 +257,20 @@ describe("list_builds", () => {
       ],
       links: { self: "x" },
     });
-    const { callTool } = createTestClient(provider);
-    const result = await callTool("list_builds", {
-      app_id: "1234567890",
-      processing_state: ["VALID"],
-      expired: false,
-      version: "42",
-      limit: 5,
-    });
+    const result = await run(
+      [
+        "builds",
+        "1234567890",
+        "--processing-state",
+        "VALID",
+        "--no-expired",
+        "--build-number",
+        "42",
+        "--limit",
+        "5",
+      ],
+      provider,
+    );
     expect(client.get).toHaveBeenCalledWith(
       "/v1/builds",
       expect.objectContaining({
@@ -199,7 +285,7 @@ describe("list_builds", () => {
         limit: 5,
       }),
     );
-    expect(JSON.parse(result.text).builds).toEqual([
+    expect(JSON.parse(result.stdout).builds).toEqual([
       {
         id: "b1",
         version: "42",
@@ -217,7 +303,7 @@ describe("list_builds", () => {
 
   it("should leave the expired filter out when not given", async () => {
     const { client, provider } = respond(empty);
-    await createTestClient(provider).callTool("list_builds", { app_id: "1" });
+    await run(["builds", "1"], provider);
     expect(client.get).toHaveBeenCalledWith(
       "/v1/builds",
       expect.objectContaining({ "filter[expired]": undefined }),
@@ -225,7 +311,7 @@ describe("list_builds", () => {
   });
 });
 
-describe("customer_reviews", () => {
+describe("reviews", () => {
   it("should filter, include the response and join it to each review", async () => {
     const { client, provider } = respond({
       data: [
@@ -264,14 +350,20 @@ describe("customer_reviews", () => {
       ],
       links: { self: "x" },
     });
-    const { callTool } = createTestClient(provider);
-    const result = await callTool("customer_reviews", {
-      app_id: "1234567890",
-      rating: [1, 2],
-      territory: "SGP",
-      has_response: true,
-      sort: "rating",
-    });
+    const result = await run(
+      [
+        "reviews",
+        "1234567890",
+        "--rating",
+        "1,2",
+        "--territory",
+        "SGP",
+        "--has-response",
+        "--sort",
+        "rating",
+      ],
+      provider,
+    );
     expect(client.get).toHaveBeenCalledWith(
       "/v1/apps/1234567890/customerReviews",
       expect.objectContaining({
@@ -283,7 +375,7 @@ describe("customer_reviews", () => {
         "fields[customerReviews]": expect.arrayContaining(["response"]),
       }),
     );
-    const { reviews } = JSON.parse(result.text);
+    const { reviews } = JSON.parse(result.stdout);
     expect(reviews[0]).toEqual({
       id: "r1",
       rating: 1,
@@ -301,52 +393,58 @@ describe("customer_reviews", () => {
     expect(reviews[1].response).toBeUndefined();
   });
 
-  it("should sort newest first by default", async () => {
+  it("should sort newest first and leave the response filter out by default", async () => {
     const { client, provider } = respond(empty);
-    await createTestClient(provider).callTool("customer_reviews", {
-      app_id: "1",
-    });
+    await run(["reviews", "1"], provider);
     expect(client.get).toHaveBeenCalledWith(
       "/v1/apps/1/customerReviews",
-      expect.objectContaining({ sort: "-createdDate" }),
+      expect.objectContaining({
+        sort: "-createdDate",
+        "exists[publishedResponse]": undefined,
+      }),
     );
   });
 });
 
-describe("tool errors", () => {
-  it.each(["list_apps", "app_versions", "list_builds", "customer_reviews"])(
-    "should turn an Apple error from %s into a classified tool error",
-    async (tool) => {
-      const { provider } = mockClient(() =>
-        Promise.reject(
-          new AscApiError(404, {
-            errors: [
-              {
-                status: "404",
-                code: "NOT_FOUND",
-                title: "x",
-                detail: "No app.",
-              },
-            ],
-          }),
-        ),
-      );
-      const result = await createTestClient(provider).callTool(tool, {
-        app_id: "1",
+describe("errors", () => {
+  it.each([["apps"], ["versions", "1"], ["builds", "1"], ["reviews", "1"]])(
+    "should exit with 1 and a classified error from %s",
+    async (...args) => {
+      const provider: AscClientProvider = () => ({
+        get: () =>
+          Promise.reject(
+            new AscApiError(404, {
+              errors: [
+                {
+                  status: "404",
+                  code: "NOT_FOUND",
+                  title: "x",
+                  detail: "No app.",
+                },
+              ],
+            }),
+          ),
       });
-      expect(result.isError).toBe(true);
-      expect(result.text).toMatch(/^\[not_found\]/);
+      const result = await run(args, provider);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/\[not_found\]/);
+      expect(result.stdout).toBe("");
     },
   );
 
   it("should report a missing key as an auth error", async () => {
-    const { callTool } = createTestClient(() => {
-      throw new CredentialsError("No App Store Connect API key is stored.");
+    const result = await run(["apps"], () => {
+      throw new CredentialsError("No App Store Connect key ID.");
     });
-    const result = await callTool("list_apps");
-    expect(result).toEqual({
-      isError: true,
-      text: "[auth] No App Store Connect API key is stored.",
-    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[auth] No App Store Connect key ID.");
+  });
+
+  it("should reject an app ID that is not numeric", async () => {
+    const { client, provider } = respond(empty);
+    const result = await run(["builds", "com.example.app"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.get).not.toHaveBeenCalled();
   });
 });

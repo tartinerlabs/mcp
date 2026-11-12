@@ -1,72 +1,16 @@
-import { createMcpHandler } from "@modelcontextprotocol/server";
-import { vi } from "vitest";
-import type { AscClient, AscClientProvider } from "../src/asc/client.ts";
-import { createServer } from "../src/server.ts";
-
-const PROTOCOL_VERSION = "2026-07-28";
-
-/** A spied provider and client whose `get` runs the given implementation. */
-export function mockClient(
-  get: AscClient["get"] = () => Promise.reject(new Error("not mocked")),
-) {
-  const client: AscClient = { get: vi.fn(get) as AscClient["get"] };
-  const provider = vi.fn<AscClientProvider>(() => client);
-  return { client, provider };
-}
-
-/** A 2026-07-28 (modern, stateless) MCP request: per-request `_meta` envelope plus the standard headers. */
-function mcpRequest(
-  method: string,
-  params: Record<string, unknown> = {},
-): Request {
-  const name = typeof params.name === "string" ? params.name : undefined;
-  return new Request("http://localhost/mcp", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      accept: "application/json, text/event-stream",
-      "mcp-protocol-version": PROTOCOL_VERSION,
-      "mcp-method": method,
-      ...(name && { "mcp-name": name }),
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method,
-      params: {
-        ...params,
-        _meta: {
-          "io.modelcontextprotocol/protocolVersion": PROTOCOL_VERSION,
-          "io.modelcontextprotocol/clientCapabilities": {},
-        },
-      },
-    }),
-  });
-}
-
-/** Parse a JSON-RPC message from a JSON or single-event SSE response body. */
-async function readMessage(response: Response) {
-  const text = await response.text();
-  const data = text
-    .split("\n")
-    .find((line) => line.startsWith("data: "))
-    ?.slice("data: ".length);
-  return JSON.parse(data ?? text);
-}
-
-/** Call the shared server factory over the SDK's stateless handler (no auth, no network). */
-export function createTestClient(
-  getClient: AscClientProvider = mockClient().provider,
-) {
-  const handler = createMcpHandler(() => createServer(getClient), {
-    legacy: "reject",
-  });
-  const rpc = async (method: string, params: Record<string, unknown> = {}) =>
-    readMessage(await handler.fetch(mcpRequest(method, params)));
-  const callTool = async (name: string, args: Record<string, unknown> = {}) => {
-    const message = await rpc("tools/call", { name, arguments: args });
-    const text: string = message.result.content[0].text;
-    return { isError: message.result.isError === true, text };
-  };
-  return { rpc, callTool };
+/** A real P-256 key as a PKCS#8 PEM, like Apple's `.p8`. */
+export async function generateP256Pem() {
+  const pair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  );
+  const der = new Uint8Array(
+    await crypto.subtle.exportKey("pkcs8", pair.privateKey),
+  );
+  const base64 = btoa(String.fromCharCode(...der));
+  // The label is kept apart so secret scanners do not read this template as a key.
+  const label = "PRIVATE KEY";
+  const pem = `-----BEGIN ${label}-----\n${base64.match(/.{1,64}/g)?.join("\n")}\n-----END ${label}-----\n`;
+  return { pem, base64, publicKey: pair.publicKey };
 }
