@@ -1,3 +1,21 @@
+# [0.13.0](https://github.com/tartinerlabs/mcp/compare/v0.12.0...v0.13.0) (2026-11-12)
+
+
+### Bug Fixes
+
+* report Bing's unset values as null ([d0290e1](https://github.com/tartinerlabs/mcp/commit/d0290e1f3e749eabbb4d8c41ec011500bc623a78))
+
+
+### Features
+
+* add Bing Webmaster MCP server ([407c453](https://github.com/tartinerlabs/mcp/commit/407c4536074abba3075435044b8fae391a1beaea))
+* add initial Bing database migration ([61f7edd](https://github.com/tartinerlabs/mcp/commit/61f7eddff15a44f1e6208ea9f77bb22bca4da005))
+* document Bing MCP server ([20642ad](https://github.com/tartinerlabs/mcp/commit/20642ad2a75e43c79da0d367021a725b088a220e))
+* host Bing MCP on Vercel ([7f603b3](https://github.com/tartinerlabs/mcp/commit/7f603b314a409fab17c62d42a012735cb321e112))
+* **index-now:** rely on root devEngines ([0cc91b1](https://github.com/tartinerlabs/mcp/commit/0cc91b12c71a3322fb7d760adaa8aa89c176b124))
+* **index-now:** replace MCP server with CLI ([53e8a59](https://github.com/tartinerlabs/mcp/commit/53e8a5914d6b4db5f98fb96f33c7e312ec508e41))
+* **index-now:** run IndexNow MCP locally ([21a4930](https://github.com/tartinerlabs/mcp/commit/21a493059eede9509af645d64a324728f20f5a92))
+
 # [0.12.0](https://github.com/tartinerlabs/mcp/compare/v0.11.0...v0.12.0) (2026-10-25)
 
 
