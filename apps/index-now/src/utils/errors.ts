@@ -1,6 +1,3 @@
-import type { CallToolResult } from "@modelcontextprotocol/server";
-import { logger } from "./logger.ts";
-
 type ErrorKind =
   | "invalid_input"
   | "permission"
@@ -148,26 +145,6 @@ export function classifyError(error: unknown): ClassifiedError {
 
   return {
     kind: "unexpected",
-    message: "Unexpected error. Check the server logs for details.",
-  };
-}
-
-/** Convert an error into an MCP tool result with `isError: true`, logging only non-sensitive fields. */
-export function toToolError(tool: string, error: unknown): CallToolResult {
-  const classified = classifyError(error);
-  logger.warn(
-    {
-      tool,
-      kind: classified.kind,
-      status: classified.status,
-      errorName: error instanceof Error ? error.name : typeof error,
-    },
-    "tool call failed",
-  );
-  return {
-    isError: true,
-    content: [
-      { type: "text", text: `[${classified.kind}] ${classified.message}` },
-    ],
+    message: "Unexpected error.",
   };
 }

@@ -4,7 +4,7 @@ An unofficial [Model Context Protocol](https://modelcontextprotocol.io) (MCP) se
 
 The server runs as a stateless Streamable HTTP endpoint on Vercel. MCP clients connect with nothing but its URL, `https://<your-domain>/mcp`: on first use the client opens a browser, you sign in with Google and approve the client, and every tool call then runs as **your** Google account. Nothing needs to run on your machine.
 
-This repository is a pnpm workspace: the Search Console server lives in `apps/gsc`, a second server for PageSpeed Insights and the Chrome UX Report lives in `apps/pagespeed` (see [PageSpeed Insights server](#pagespeed-insights-server)), a third for IndexNow URL submission lives in `apps/index-now` (see [IndexNow server](#indexnow-server)), a fourth for read-only App Store Connect access lives in `apps/asc` (see [App Store Connect server](#app-store-connect-server)), and a fifth for read-only Bing Webmaster Tools access lives in `apps/bing` (see [Bing Webmaster Tools server](#bing-webmaster-tools-server)). Shared auth and HTTP code is in `packages/core`.
+This repository is a pnpm workspace: the Search Console server lives in `apps/gsc`, a second server for PageSpeed Insights and the Chrome UX Report lives in `apps/pagespeed` (see [PageSpeed Insights server](#pagespeed-insights-server)), a third for read-only App Store Connect access lives in `apps/asc` (see [App Store Connect server](#app-store-connect-server)), a fourth for read-only Bing Webmaster Tools access lives in `apps/bing` (see [Bing Webmaster Tools server](#bing-webmaster-tools-server)), and a command-line tool for IndexNow URL submission lives in `apps/index-now` (see [IndexNow CLI](#indexnow-cli)). Shared auth and HTTP code is in `packages/core`.
 
 > This project is not affiliated with, endorsed by or supported by Google. "Google" and "Search Console" are trademarks of Google LLC.
 
@@ -211,23 +211,25 @@ Setup differs from the Search Console server in three ways:
 
 The Chrome UX Report API allows 150 queries per minute per Google Cloud project. Pages without enough Chrome traffic have no CrUX data, which is reported as `[not_found]`.
 
-## IndexNow server
+## IndexNow CLI
 
-`apps/index-now` submits changed URLs to [IndexNow](https://www.indexnow.org), which shares them with Bing, Yandex, Seznam, Naver and other participating search engines (Google does not take part). Unlike the other servers it has no sign-in and no database: ownership is proved by the site itself, which must serve a key file at `https://<host>/<key>.txt` whose contents are the key.
+`apps/index-now` is a command-line tool, not an MCP server. It submits changed URLs to [IndexNow](https://www.indexnow.org), which shares them with Bing, Yandex, Seznam, Naver and other participating search engines (Google does not take part). It has no sign-in and no database: ownership is proved by the site itself, which must serve a key file at `https://<host>/<key>.txt` whose contents are the key.
 
-| Tool | What it does |
+| Command | What it does |
 | --- | --- |
-| `ping` | Checks that the server is running. |
-| `verify_key` | Checks that the live site serves the key file with the key as its contents. Submits nothing. |
-| `submit_urls` | Submits up to 10,000 URLs on one host. It waits for the key file to be live and retries IndexNow outages (a rate limit fails at once), streaming progress until the outcome. The only tool that is not read-only. |
+| `verify <url> --key <key>` | Checks that the live site serves the key file with the key as its contents. Submits nothing. Exits with code 1 when the key file is not valid. |
+| `submit <urls...> --key <key>` | Submits up to 10,000 URLs on one host. It waits for the key file to be live and retries IndexNow outages (a rate limit fails at once). |
 
-The server's instructions tell the client to use it only in projects that contain a key file (such as `public/<key>.txt`), and to submit only the production URLs that changed, once the deploy is live.
+Both take `--key-location <url>` when the key file is not at the site root. Submit only the production URLs that changed, once the deploy is live.
 
-Unlike the other servers it runs locally over stdio, from a checkout of this repository. IndexNow permanently rate-limits the shared egress IPs of cloud platforms (it answered every submission from Cloudflare Workers with HTTP 429), so submissions must leave from the user's own IP. `submit_urls` retries the key-file check while a deploy goes live (about 16 minutes), and the IndexNow POST on 5xx (honouring `Retry-After`) and network errors. A 429 ends the call with a `[quota]` error at once, because retrying a throttled request keeps it throttled. A Claude Code session moves a `submit_urls` call still running after two minutes to the background, so the agent keeps working until the outcome arrives. No variables are required; `LOG_LEVEL` works as for the other servers, and logs go to stderr. Build it, then add it to Claude Code for every project:
+It runs on your own machine, from a checkout of this repository. IndexNow permanently rate-limits the shared egress IPs of cloud platforms (it answered every submission from Cloudflare Workers with HTTP 429), so submissions must leave from your own IP. `submit` retries the key-file check while a deploy goes live (about 16 minutes), and the IndexNow POST on 5xx (honouring `Retry-After`) and network errors. A 429 ends the command with a `[quota]` error at once, because retrying a throttled request keeps it throttled.
+
+The result is printed as JSON on stdout. Retry progress and errors go to stderr, and a failure exits with code 1. Build it, then run it:
 
 ```sh
 pnpm --filter @tartinerlabs/index-now-mcp build
-claude mcp add --scope user index-now -- node "$PWD/apps/index-now/dist/index.js"
+node apps/index-now/dist/index.js verify https://example.com --key <key>
+node apps/index-now/dist/index.js submit https://example.com/new-page --key <key>
 ```
 
 ## App Store Connect server
