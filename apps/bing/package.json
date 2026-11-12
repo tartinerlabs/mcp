@@ -1,6 +1,6 @@
 {
   "name": "@tartinerlabs/bing-webmaster-mcp",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "Unofficial Model Context Protocol server for read-only Bing Webmaster Tools access, with each user's own Bing sign-in (OAuth 2.1 via Better Auth) on Vercel.",
   "license": "MIT",
   "type": "module",

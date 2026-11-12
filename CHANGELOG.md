@@ -1,3 +1,10 @@
+# [0.14.0](https://github.com/tartinerlabs/mcp/compare/v0.13.0...v0.14.0) (2026-11-12)
+
+
+### Features
+
+* **asc:** replace MCP server with CLI ([ef48f37](https://github.com/tartinerlabs/mcp/commit/ef48f37c9eed3938990c844b185e81195f5e3543))
+
 # [0.13.0](https://github.com/tartinerlabs/mcp/compare/v0.12.0...v0.13.0) (2026-11-12)
 
 
