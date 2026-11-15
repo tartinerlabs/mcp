@@ -29,4 +29,8 @@ catalog:
 allowBuilds:
   esbuild: false
 
+hoistPattern:
+  - "*"
+  - "!conventional-changelog-conventionalcommits"
+
 savePrefix: ""
