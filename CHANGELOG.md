@@ -1,3 +1,10 @@
+## [0.14.1](https://github.com/tartinerlabs/mcp/compare/v0.14.0...v0.14.1) (2026-11-15)
+
+
+### Bug Fixes
+
+* **core:** refuse subscriptions/listen streams ([293e752](https://github.com/tartinerlabs/mcp/commit/293e752fe7735906851ed25a42f64b8006bb80b4))
+
 # [0.14.0](https://github.com/tartinerlabs/mcp/compare/v0.13.0...v0.14.0) (2026-11-12)
 
 
