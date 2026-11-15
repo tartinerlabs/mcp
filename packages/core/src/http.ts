@@ -38,6 +38,9 @@ export function createMcpEndpoint({
   const handler = createMcpHandler((ctx) => createServer(ctx.authInfo), {
     // Only the 2026-07-28 protocol: @better-auth/mcp does not support 2025-era clients.
     legacy: "reject",
+    // Refuse subscriptions/listen: the stream would stay open until the
+    // function times out, and the tool list never changes at runtime.
+    maxSubscriptions: 0,
     onerror: (error) =>
       logger.error(
         { errorName: error.name, errorMessage: error.message },
