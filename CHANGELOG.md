@@ -1,3 +1,9 @@
+## [0.18.0](https://github.com/tartinerlabs/mcp/compare/v0.17.0...v0.18.0) (2026-11-21)
+
+### Features
+
+* **asc:** reply to and delete review responses ([9533dd9](https://github.com/tartinerlabs/mcp/commit/9533dd944602823420f01040e211c8214aa89b5e))
+
 ## [0.17.0](https://github.com/tartinerlabs/mcp/compare/v0.16.0...v0.17.0) (2026-11-21)
 
 ### Features
