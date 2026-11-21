@@ -1,3 +1,9 @@
+## [0.17.0](https://github.com/tartinerlabs/mcp/compare/v0.16.0...v0.17.0) (2026-11-21)
+
+### Features
+
+* **asc:** add status command ([246c242](https://github.com/tartinerlabs/mcp/commit/246c242acddad7e0fdfef60877cf32ba42c84d42))
+
 ## [0.16.0](https://github.com/tartinerlabs/mcp/compare/v0.15.0...v0.16.0) (2026-11-21)
 
 ### Features
