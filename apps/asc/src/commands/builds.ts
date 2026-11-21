@@ -30,7 +30,7 @@ interface PreReleaseVersionAttributes {
   platform?: string;
 }
 
-type BuildsDocument = AscDocument<BuildAttributes>;
+export type BuildsDocument = AscDocument<BuildAttributes>;
 
 const buildNumberSchema = z.string().trim().min(1).max(100);
 
@@ -46,7 +46,7 @@ export const buildsInput = z.object({
 });
 
 /** Newest upload first, with the marketing version and platform from the pre-release version. */
-function buildsQuery(appId: string, buildNumber?: string): AscQuery {
+export function buildsQuery(appId: string, buildNumber?: string): AscQuery {
   return {
     "filter[app]": appId,
     "filter[version]": buildNumber,
@@ -66,7 +66,7 @@ function buildsQuery(appId: string, buildNumber?: string): AscQuery {
   };
 }
 
-function shapeBuild(
+export function shapeBuild(
   response: BuildsDocument,
   build: AscResource<BuildAttributes>,
 ) {

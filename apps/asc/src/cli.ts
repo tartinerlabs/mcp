@@ -12,7 +12,9 @@ import {
   waitInput,
 } from "./commands/builds.ts";
 import { listReviews, reviewsInput } from "./commands/reviews.ts";
+import { getStatus, statusInput } from "./commands/status.ts";
 import { listVersions, versionsInput } from "./commands/versions.ts";
+import { PLATFORMS } from "./schemas/common.ts";
 import { classifyError } from "./utils/errors.ts";
 
 /** Resolves the client inside each command, so a missing key ends that command with an `[auth]` error. */
@@ -211,6 +213,21 @@ export function createProgram(
     .option(...CURSOR)
     .action(async (appId: string, options, command: Command) => {
       await run(command, reviewsInput, { appId, ...options }, listReviews);
+    });
+
+  program
+    .command("status")
+    .description(
+      "Where an app stands on each platform: the live version, a newer version being prepared or in review (with its build and any phased release), and the newest build with its processing state.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .addOption(
+      new Option("--platform <platform>", "only this platform").choices([
+        ...PLATFORMS,
+      ]),
+    )
+    .action(async (appId: string, options, command: Command) => {
+      await run(command, statusInput, { appId, ...options }, getStatus);
     });
 
   return program;
