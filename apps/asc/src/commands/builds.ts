@@ -5,7 +5,12 @@ import {
   pageInfo,
   related,
 } from "../asc/client.ts";
-import { appIdSchema, commaList, limitSchema } from "../schemas/common.ts";
+import {
+  appIdSchema,
+  commaList,
+  cursorSchema,
+  limitSchema,
+} from "../schemas/common.ts";
 
 interface BuildAttributes {
   version?: string;
@@ -30,6 +35,7 @@ export const buildsInput = z.object({
   expired: z.boolean().optional(),
   buildNumber: z.string().trim().min(1).max(100).optional(),
   limit: limitSchema,
+  cursor: cursorSchema,
 });
 
 export async function listBuilds(
@@ -57,6 +63,7 @@ export async function listBuilds(
       ],
       "fields[preReleaseVersions]": ["version", "platform"],
       limit: input.limit,
+      cursor: input.cursor,
     },
   );
   return {

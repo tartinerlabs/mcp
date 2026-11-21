@@ -243,7 +243,7 @@ node apps/index-now/dist/index.js submit https://example.com/new-page --key <key
 | `builds <app-id>` | An app's builds, newest upload first: build number, marketing version, processing state and expiry. |
 | `reviews <app-id>` | Customer reviews filtered by star rating, territory and whether a response exists, with your response. |
 
-Each command returns one page (up to 200, `--limit`) and reports `hasMore`. A 429 from Apple is reported as `[quota]` at once, without retrying. Run a command with `--help` for its filters.
+Each command returns one page (up to 200, `--limit`) and reports `hasMore`; when there is more, pass the result's `nextCursor` back as `--cursor` to read the next page. A 429 from Apple is reported as `[quota]` at once, without retrying. Run a command with `--help` for its filters.
 
 The key comes from options, or from environment variables when an option is not given. Nothing is stored: the `.p8` file is read on each run.
 

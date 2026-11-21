@@ -15,6 +15,10 @@ export type AscClientProvider = (
 ) => AscClient | Promise<AscClient>;
 
 const LIMIT = ["--limit <number>", "maximum number of results, 1 to 200", "50"];
+const CURSOR = [
+  "--cursor <cursor>",
+  "read the next page: the nextCursor value from the previous result",
+] as const;
 
 /**
  * The command-line program: read-only App Store Connect queries. Results are
@@ -73,6 +77,7 @@ export function createProgram(getClient: AscClientProvider): Command {
       "name",
     )
     .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
     .action((options, command: Command) =>
       run(command, appsInput, options, listApps),
     );
@@ -96,6 +101,7 @@ export function createProgram(getClient: AscClientProvider): Command {
       "only these states, comma-separated, such as IN_REVIEW,REJECTED",
     )
     .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
     .action((appId: string, options, command: Command) =>
       run(command, versionsInput, { appId, ...options }, listVersions),
     );
@@ -117,6 +123,7 @@ export function createProgram(getClient: AscClientProvider): Command {
       "only builds with this build number (CFBundleVersion)",
     )
     .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
     .action((appId: string, options, command: Command) =>
       run(command, buildsInput, { appId, ...options }, listBuilds),
     );
@@ -146,6 +153,7 @@ export function createProgram(getClient: AscClientProvider): Command {
       "-createdDate",
     )
     .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
     .action((appId: string, options, command: Command) =>
       run(command, reviewsInput, { appId, ...options }, listReviews),
     );

@@ -104,7 +104,29 @@ describe("apps", () => {
       ],
       total: 3,
       hasMore: true,
+      nextCursor: "AB",
     });
+  });
+
+  it("should pass --cursor through to read the next page", async () => {
+    const { client, provider } = respond(empty);
+    const result = await run(["apps", "--cursor", "AB"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/apps",
+      expect.objectContaining({ cursor: "AB" }),
+    );
+  });
+
+  it("should refuse a URL as the cursor", async () => {
+    const { client, provider } = respond(empty);
+    const result = await run(
+      ["apps", "--cursor", "https://example.com/v1/apps?cursor=AB"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.get).not.toHaveBeenCalled();
   });
 
   it("should default to sorting by name, 50 at a time", async () => {
