@@ -36,6 +36,11 @@ export class UnexpectedResponseError extends Error {
   override name = "UnexpectedResponseError";
 }
 
+/** Thrown when `builds wait` gives up before the build finishes processing. */
+export class WaitTimeoutError extends Error {
+  override name = "WaitTimeoutError";
+}
+
 interface ClassifiedError {
   kind: ErrorKind;
   message: string;
@@ -105,6 +110,9 @@ export function classifyError(error: unknown): ClassifiedError {
   }
   if (error instanceof UnexpectedResponseError) {
     return { kind: "unexpected", message: error.message };
+  }
+  if (error instanceof WaitTimeoutError) {
+    return { kind: "unavailable", message: error.message };
   }
   if (error instanceof Error && error.name === "TimeoutError") {
     return {

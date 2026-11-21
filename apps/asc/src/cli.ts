@@ -4,7 +4,13 @@ import pkg from "../package.json" with { type: "json" };
 import type { AscClient } from "./asc/client.ts";
 import type { CredentialOptions } from "./asc/credentials.ts";
 import { appsInput, listApps } from "./commands/apps.ts";
-import { buildsInput, listBuilds } from "./commands/builds.ts";
+import {
+  buildsInput,
+  listBuilds,
+  type WaitDependencies,
+  waitForBuild,
+  waitInput,
+} from "./commands/builds.ts";
 import { listReviews, reviewsInput } from "./commands/reviews.ts";
 import { listVersions, versionsInput } from "./commands/versions.ts";
 import { classifyError } from "./utils/errors.ts";
@@ -20,11 +26,20 @@ const CURSOR = [
   "read the next page: the nextCursor value from the previous result",
 ] as const;
 
+/** Clock and sleep for `builds wait`; tests pass fakes. */
+export type ProgramOptions = Partial<Pick<WaitDependencies, "sleep" | "now">>;
+
 /**
  * The command-line program: read-only App Store Connect queries. Results are
  * JSON on stdout; errors go to stderr and exit with code 1.
  */
-export function createProgram(getClient: AscClientProvider): Command {
+export function createProgram(
+  getClient: AscClientProvider,
+  {
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    now = Date.now,
+  }: ProgramOptions = {},
+): Command {
   const program = new Command()
     .name("asc")
     .description(
@@ -41,18 +56,18 @@ export function createProgram(getClient: AscClientProvider): Command {
       "path to the key's .p8 file (default: ASC_PRIVATE_KEY_PATH)",
     );
 
-  /** Validates the input, runs the query and prints its result. */
-  async function run<Schema extends z.ZodType>(
+  /** Validates the input, runs the query, prints its result and returns it. */
+  async function run<Schema extends z.ZodType, Result>(
     command: Command,
     schema: Schema,
     input: unknown,
-    execute: (client: AscClient, input: z.output<Schema>) => Promise<unknown>,
-  ): Promise<void> {
+    execute: (client: AscClient, input: z.output<Schema>) => Promise<Result>,
+  ): Promise<Result> {
     const parsed = schema.safeParse(input);
     if (!parsed.success) {
       return command.error(`[invalid_input] ${z.prettifyError(parsed.error)}`);
     }
-    let result: unknown;
+    let result: Result;
     try {
       const client = await getClient(program.opts<CredentialOptions>());
       result = await execute(client, parsed.data);
@@ -62,6 +77,7 @@ export function createProgram(getClient: AscClientProvider): Command {
       return command.error(`[${kind}] ${message}`);
     }
     console.log(JSON.stringify(result, null, 2));
+    return result;
   }
 
   program
@@ -78,9 +94,9 @@ export function createProgram(getClient: AscClientProvider): Command {
     )
     .option(...(LIMIT as [string, string, string]))
     .option(...CURSOR)
-    .action((options, command: Command) =>
-      run(command, appsInput, options, listApps),
-    );
+    .action(async (options, command: Command) => {
+      await run(command, appsInput, options, listApps);
+    });
 
   program
     .command("versions")
@@ -102,11 +118,11 @@ export function createProgram(getClient: AscClientProvider): Command {
     )
     .option(...(LIMIT as [string, string, string]))
     .option(...CURSOR)
-    .action((appId: string, options, command: Command) =>
-      run(command, versionsInput, { appId, ...options }, listVersions),
-    );
+    .action(async (appId: string, options, command: Command) => {
+      await run(command, versionsInput, { appId, ...options }, listVersions);
+    });
 
-  program
+  const builds = program
     .command("builds")
     .description(
       "An app's builds, newest upload first: build number, marketing version and platform, processing state, upload and expiry dates.",
@@ -124,9 +140,48 @@ export function createProgram(getClient: AscClientProvider): Command {
     )
     .option(...(LIMIT as [string, string, string]))
     .option(...CURSOR)
-    .action((appId: string, options, command: Command) =>
-      run(command, buildsInput, { appId, ...options }, listBuilds),
-    );
+    .action(async (appId: string, options, command: Command) => {
+      await run(command, buildsInput, { appId, ...options }, listBuilds);
+    });
+
+  builds
+    .command("wait")
+    .description(
+      "Wait until a build finishes processing, then print it. Exits 0 when the build is VALID and 1 when it is FAILED or INVALID; progress goes to stderr.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option(
+      "--build-number <number>",
+      "the build number (CFBundleVersion) to wait for (required)",
+    )
+    .option("--timeout <minutes>", "give up after this long, 1 to 180", "30")
+    .option(
+      "--interval <seconds>",
+      "time between checks, 10 to 300; a rate limit backs off further",
+      "30",
+    )
+    .action(async (appId: string, options, command: Command) => {
+      const writeErr =
+        command.configureOutput().writeErr ??
+        ((text: string) => process.stderr.write(text));
+      const build = await run(
+        command,
+        waitInput,
+        // `builds` also defines --build-number, so Commander hands it to the parent.
+        { appId, buildNumber: command.parent?.opts().buildNumber, ...options },
+        (client, input) =>
+          waitForBuild(client, input, {
+            sleep,
+            now,
+            progress: (line) => writeErr(`${line}\n`),
+          }),
+      );
+      if (build.processingState !== "VALID") {
+        command.error(
+          `Build ${build.version} finished processing as ${build.processingState}.`,
+        );
+      }
+    });
 
   program
     .command("reviews")
@@ -154,9 +209,9 @@ export function createProgram(getClient: AscClientProvider): Command {
     )
     .option(...(LIMIT as [string, string, string]))
     .option(...CURSOR)
-    .action((appId: string, options, command: Command) =>
-      run(command, reviewsInput, { appId, ...options }, listReviews),
-    );
+    .action(async (appId: string, options, command: Command) => {
+      await run(command, reviewsInput, { appId, ...options }, listReviews);
+    });
 
   return program;
 }
