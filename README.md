@@ -240,8 +240,9 @@ node apps/index-now/dist/index.js submit https://example.com/new-page --key <key
 | --- | --- |
 | `apps` | Apps visible to the key: id, name, bundle ID, SKU and primary locale. |
 | `versions <app-id>` | An app's App Store versions, newest first, with their state and attached build number. |
-| `builds <app-id>` | An app's builds, newest upload first: build number, marketing version, processing state and expiry. |
+| `builds <app-id>` | An app's builds, newest upload first: build number, marketing version, processing state, expiry and the export compliance answer (`usesNonExemptEncryption`, `null` while unanswered). |
 | `builds wait <app-id> --build-number <n>` | Waits until that build finishes processing and prints it: exits 0 when it is `VALID`, 1 when it is `FAILED` or `INVALID`. Checks every 30 seconds (`--interval`) for up to 30 minutes (`--timeout`), with progress on stderr. A build not visible yet counts as still processing. |
+| `builds compliance <build-id> --no-encryption` | Answers a build's export compliance question, which TestFlight shows as "Missing Compliance" until it is answered: `--no-encryption` when the build uses no encryption or only exempt encryption such as HTTPS, `--encryption` when it uses non-exempt encryption (that also needs an encryption declaration in App Store Connect). |
 | `reviews <app-id>` | Customer reviews filtered by star rating, territory and whether a response exists, with your response. |
 | `reviews reply <review-id> --body <text>` | Posts a public developer response to a review (or `--body-file <path>`), replacing your existing one. Apple publishes it after a delay. |
 | `reviews delete-reply <review-id>` | Deletes your developer response to a review. |
@@ -249,7 +250,9 @@ node apps/index-now/dist/index.js submit https://example.com/new-page --key <key
 
 Each list command returns one page (up to 200, `--limit`) and reports `hasMore`; when there is more, pass the result's `nextCursor` back as `--cursor` to read the next page. A 429 from Apple is reported as `[quota]` at once, without retrying, except in `builds wait`, which backs off (1 minute, doubling up to 10) and keeps waiting. Run a command with `--help` for its filters.
 
-Commands that change anything (`reviews reply`, `reviews delete-reply`) only print what they would do, with `"dryRun": true`, unless given `--yes`. A dry run still reads from App Store Connect, so it shows the review and any reply that would be replaced or deleted. They need a key whose role allows the change: App Manager, or Customer Support for review replies. A key without it gets a `[permission]` error.
+Commands that change anything (`builds compliance`, `reviews reply`, `reviews delete-reply`) only print what they would do, with `"dryRun": true`, unless given `--yes`. A dry run still reads from App Store Connect, so it shows the build's current answer, or the review and any reply that would be replaced or deleted. They need a key whose role allows the change: App Manager, or Customer Support for review replies. A key without it gets a `[permission]` error.
+
+Setting `ITSAppUsesNonExemptEncryption` in the app's `Info.plist` answers the export compliance question for every build uploaded after it, so most apps only need `builds compliance` for builds already uploaded without it.
 
 The key comes from options, or from environment variables when an option is not given. Nothing is stored: the `.p8` file is read on each run.
 

@@ -12,10 +12,11 @@ import {
 import { AscApiError, CredentialsError } from "../src/utils/errors.ts";
 
 /** Write methods for read-only tests: any call fails the test. */
-function noWrites(): Pick<AscClient, "post" | "delete"> {
+function noWrites(): Pick<AscClient, "post" | "patch" | "delete"> {
   const fail = () => Promise.reject(new Error("unexpected write"));
   return {
     post: vi.fn(fail) as AscClient["post"],
+    patch: vi.fn(fail) as AscClient["patch"],
     delete: vi.fn(fail) as AscClient["delete"],
   };
 }
@@ -310,6 +311,7 @@ describe("builds", () => {
             minOsVersion: "17.0",
             processingState: "VALID",
             buildAudienceType: "APP_STORE_ELIGIBLE",
+            usesNonExemptEncryption: null,
           },
           relationships: {
             preReleaseVersion: {
@@ -350,7 +352,10 @@ describe("builds", () => {
         "filter[version]": "42",
         sort: "-uploadedDate",
         include: "preReleaseVersion",
-        "fields[builds]": expect.arrayContaining(["preReleaseVersion"]),
+        "fields[builds]": expect.arrayContaining([
+          "preReleaseVersion",
+          "usesNonExemptEncryption",
+        ]),
         "fields[preReleaseVersions]": ["version", "platform"],
         limit: 5,
       }),
@@ -367,6 +372,7 @@ describe("builds", () => {
         expired: false,
         buildAudienceType: "APP_STORE_ELIGIBLE",
         minOsVersion: "17.0",
+        usesNonExemptEncryption: null,
       },
     ]);
   });
@@ -961,6 +967,9 @@ describe("reviews reply and delete-reply", () => {
               },
             })),
       ) as AscClient["post"],
+      patch: vi.fn(() =>
+        Promise.reject(new Error("unexpected patch")),
+      ) as AscClient["patch"],
       delete: vi.fn(() => Promise.resolve()) as AscClient["delete"],
     };
     return { client, provider: vi.fn<AscClientProvider>(() => client) };
@@ -1148,5 +1157,148 @@ describe("reviews reply and delete-reply", () => {
       "/v1/apps/1234567890/customerReviews",
       expect.objectContaining({ include: "response" }),
     );
+  });
+});
+
+describe("builds compliance", () => {
+  /** One build with the given export compliance answer. */
+  function buildDocument(usesNonExemptEncryption: boolean | null) {
+    return {
+      data: {
+        type: "builds",
+        id: "B1",
+        attributes: {
+          version: "42",
+          processingState: "VALID",
+          usesNonExemptEncryption,
+        },
+        relationships: {
+          preReleaseVersion: {
+            data: { type: "preReleaseVersions", id: "p1" },
+          },
+        },
+      },
+      included: [
+        {
+          type: "preReleaseVersions",
+          id: "p1",
+          attributes: { version: "1.2.0", platform: "IOS" },
+        },
+      ],
+    };
+  }
+
+  /** A client that reads the build and records the PATCH. */
+  function writable(usesNonExemptEncryption: boolean | null) {
+    const client: AscClient = {
+      ...noWrites(),
+      get: vi.fn(() =>
+        Promise.resolve(buildDocument(usesNonExemptEncryption)),
+      ) as AscClient["get"],
+      patch: vi.fn(() =>
+        Promise.resolve(buildDocument(false)),
+      ) as AscClient["patch"],
+    };
+    return { client, provider: vi.fn<AscClientProvider>(() => client) };
+  }
+
+  it("should only show the build and its answer without --yes", async () => {
+    const { client, provider } = writable(null);
+    const result = await run(
+      ["builds", "compliance", "B1", "--no-encryption"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/builds/B1",
+      expect.objectContaining({
+        include: "preReleaseVersion",
+        "fields[builds]": expect.arrayContaining(["usesNonExemptEncryption"]),
+      }),
+    );
+    expect(client.patch).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "compliance",
+      build: expect.objectContaining({
+        id: "B1",
+        version: "42",
+        marketingVersion: "1.2.0",
+        usesNonExemptEncryption: null,
+      }),
+      usesNonExemptEncryption: false,
+      changes: true,
+    });
+    expect(result.stderr).toContain("Dry run: nothing was changed");
+  });
+
+  it("should set the answer with --yes", async () => {
+    const { client, provider } = writable(null);
+    const result = await run(
+      ["builds", "compliance", "B1", "--no-encryption", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledWith("/v1/builds/B1", {
+      data: {
+        type: "builds",
+        id: "B1",
+        attributes: { usesNonExemptEncryption: false },
+      },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "compliance",
+      buildId: "B1",
+      usesNonExemptEncryption: false,
+      changed: true,
+    });
+    expect(result.stderr).toBe("");
+  });
+
+  it("should send true for --encryption", async () => {
+    const { client, provider } = writable(false);
+    await run(
+      ["builds", "compliance", "B1", "--encryption", "--yes"],
+      provider,
+    );
+    expect(client.patch).toHaveBeenCalledWith("/v1/builds/B1", {
+      data: {
+        type: "builds",
+        id: "B1",
+        attributes: { usesNonExemptEncryption: true },
+      },
+    });
+  });
+
+  it("should not write when the build already has that answer", async () => {
+    const { client, provider } = writable(false);
+    const result = await run(
+      ["builds", "compliance", "B1", "--no-encryption", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toMatchObject({ changed: false });
+  });
+
+  it("should require an answer, even with --yes", async () => {
+    const { client, provider } = writable(null);
+    const result = await run(["builds", "compliance", "B1", "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("Give --no-encryption or --encryption.");
+    expect(client.get).not.toHaveBeenCalled();
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should reject a build id that is not one path segment", async () => {
+    const { client, provider } = writable(null);
+    const result = await run(
+      ["builds", "compliance", "../apps", "--no-encryption"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.get).not.toHaveBeenCalled();
   });
 });

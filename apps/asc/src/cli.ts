@@ -7,7 +7,9 @@ import type { CredentialOptions } from "./asc/credentials.ts";
 import { appsInput, listApps } from "./commands/apps.ts";
 import {
   buildsInput,
+  complianceInput,
   listBuilds,
+  setBuildCompliance,
   type WaitDependencies,
   waitForBuild,
   waitInput,
@@ -193,7 +195,7 @@ export function createProgram(
   const builds = program
     .command("builds")
     .description(
-      "An app's builds, newest upload first: build number, marketing version and platform, processing state, upload and expiry dates.",
+      "An app's builds, newest upload first: build number, marketing version and platform, processing state, upload and expiry dates, and the export compliance answer (usesNonExemptEncryption, null while unanswered).",
     )
     .argument("<app-id>", "numeric app ID from the apps command")
     .option(
@@ -247,6 +249,34 @@ export function createProgram(
           `Build ${build.version} finished processing as ${build.processingState}.`,
         );
       }
+    });
+
+  builds
+    .command("compliance")
+    .description(
+      "Answer a build's export compliance question so it can be tested and submitted. Without --yes, prints the build and its current answer. Setting ITSAppUsesNonExemptEncryption in Info.plist answers it for future builds. Needs a key with the App Manager role.",
+    )
+    .argument("<build-id>", "build id from the builds command")
+    .option(
+      "--no-encryption",
+      "the build uses no encryption, or only exempt encryption (such as HTTPS)",
+    )
+    .option(
+      "--encryption",
+      "the build uses non-exempt encryption; it also needs an encryption declaration in App Store Connect",
+    )
+    .option(...YES)
+    .action(async (buildId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        complianceInput,
+        {
+          buildId,
+          usesNonExemptEncryption: options.encryption,
+          yes: options.yes,
+        },
+        setBuildCompliance,
+      );
     });
 
   const reviews = program
