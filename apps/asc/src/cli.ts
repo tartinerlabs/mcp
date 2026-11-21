@@ -41,6 +41,20 @@ import {
   setMetadataInput,
 } from "./commands/metadata.ts";
 import {
+  createPageTest,
+  createPageTestInput,
+  getPageTest,
+  listPageTests,
+  pageTestInput,
+  pageTestsInput,
+  pageTestWriteInput,
+  startPageTest,
+  stopPageTest,
+  submitPageTest,
+  uploadPageTestInput,
+  uploadPageTestScreenshots,
+} from "./commands/page-tests.ts";
+import {
   deleteReplyInput,
   deleteReviewReply,
   replyInput,
@@ -157,7 +171,7 @@ export function createProgram(
   const program = new Command()
     .name("asc")
     .description(
-      "App Store Connect with your own API key: apps, versions and their metadata, screenshots and app previews, custom product pages, app info, builds, release status, TestFlight groups, testers, feedback and notes, and customer reviews. Commands that change anything only print what they would do unless given --yes.",
+      "App Store Connect with your own API key: apps, versions and their metadata, screenshots and app previews, custom product pages, product page optimization tests, app info, builds, release status, TestFlight groups, testers, feedback and notes, and customer reviews. Commands that change anything only print what they would do unless given --yes.",
     )
     .version(pkg.version)
     .option("--key-id <id>", "API key ID (default: ASC_KEY_ID)")
@@ -521,6 +535,138 @@ export function createProgram(
         submitCustomPageInput,
         { versionId, ...options },
         submitCustomPage,
+      );
+    });
+
+  const pageTests = program
+    .command("page-tests")
+    .description(
+      "An app's product page optimization tests: id, name, platform, state, traffic proportion, start and end dates, and each treatment's name and alternate icon. Apple's API returns no conversion results; read those in App Store Connect. Commands that change anything need a key with the App Manager role.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option(
+      "--state <states>",
+      "only these states, comma-separated, such as APPROVED,COMPLETED",
+    )
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (appId: string, options, command: Command) => {
+      await run(command, pageTestsInput, { appId, ...options }, listPageTests);
+    });
+
+  pageTests
+    .command("show")
+    .description(
+      "One product page test with each treatment: treatment id, name, alternate icon, and its locales.",
+    )
+    .argument("<test-id>", "test id from the page-tests command")
+    .action(async (testId: string, _options, command: Command) => {
+      await run(command, pageTestInput, { testId }, getPageTest);
+    });
+
+  pageTests
+    .command("create")
+    .description(
+      "Create a product page test with up to three treatments, each with a localization per --locale; add screenshots with page-tests upload, then submit it. An alternate icon must already ship in the app's binary. Without --yes, prints the test and how many of the app's tests have not ended.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option("--name <name>", "the test's name in App Store Connect (required)")
+    .option(
+      "--traffic-proportion <percent>",
+      "the share of visitors in the test, 1 to 100 (required)",
+    )
+    .option(
+      "--treatment <name[=icon]>",
+      "a treatment's name, with the alternate icon it shows after = (repeat, up to 3)",
+      (value: string, previous: string[] = []) => [...previous, value],
+    )
+    .option(
+      "--locale <locales>",
+      "locales each treatment gets, such as en-US, comma-separated or repeated (required)",
+      collectList,
+    )
+    .addOption(
+      new Option("--platform <platform>", "the test's platform")
+        .choices([...PLATFORMS])
+        .default("IOS"),
+    )
+    .option(...YES)
+    .action(async (appId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        createPageTestInput,
+        {
+          appId,
+          ...options,
+          treatments: options.treatment ?? [],
+          locales: options.locale ?? [],
+        },
+        createPageTest,
+      );
+    });
+
+  pageTests
+    .command("upload")
+    .description(
+      "Upload a folder of screenshots and app previews to a treatment, as screenshots upload does for a version: one subfolder per locale, each file placed by the device group in its name or its pixel size. Only a test being prepared or rejected accepts them. Without --yes, prints where each file would go.",
+    )
+    .argument("<treatment-id>", "treatment id from page-tests show")
+    .option("--dir <folder>", "the folder of locale subfolders (required)")
+    .option(...YES)
+    .action(async (treatmentId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        uploadPageTestInput,
+        { treatmentId, ...options },
+        uploadPageTestScreenshots,
+      );
+    });
+
+  pageTests
+    .command("submit")
+    .description(
+      "Submit a test for App Review on its own. Refuses when the app has a review submission being prepared with other items, which would go for review too. Without --yes, prints the test and the submission it would use.",
+    )
+    .argument("<test-id>", "test id from the page-tests command")
+    .option(...YES)
+    .action(async (testId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        pageTestWriteInput,
+        { testId, yes: options.yes },
+        submitPageTest,
+      );
+    });
+
+  pageTests
+    .command("start")
+    .description(
+      "Start a test that App Review approved, or one that needs no review. Without --yes, prints the test.",
+    )
+    .argument("<test-id>", "test id from the page-tests command")
+    .option(...YES)
+    .action(async (testId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        pageTestWriteInput,
+        { testId, yes: options.yes },
+        startPageTest,
+      );
+    });
+
+  pageTests
+    .command("stop")
+    .description(
+      "Stop a running test; it cannot start again. Without --yes, prints the test.",
+    )
+    .argument("<test-id>", "test id from the page-tests command")
+    .option(...YES)
+    .action(async (testId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        pageTestWriteInput,
+        { testId, yes: options.yes },
+        stopPageTest,
       );
     });
 

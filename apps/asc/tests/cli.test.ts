@@ -3982,3 +3982,643 @@ describe("custom-pages submit", () => {
     expect(client.post).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Product page test T1 of app 123 with treatment TR1 (en-US TL1, ja TL2), on
+ * top of the screenshots mock for the asset library and ref data.
+ */
+function pageTestsClient({
+  state = "PREPARE_FOR_SUBMISSION",
+  startDate = null as string | null,
+  reviewRequired = true,
+  drafts = [] as { id: string; items: Record<string, unknown>[] }[],
+} = {}) {
+  const base = screenshotsClient();
+  const baseGet = vi.mocked(base.client.get).getMockImplementation();
+  const test = {
+    type: "appStoreVersionExperiments",
+    id: "T1",
+    attributes: {
+      name: "Icon test",
+      platform: "IOS",
+      state,
+      trafficProportion: 30,
+      reviewRequired,
+      startDate,
+      endDate: null,
+    },
+  };
+  const treatment = {
+    type: "appStoreVersionExperimentTreatments",
+    id: "TR1",
+    attributes: {
+      name: "Bold",
+      appIconName: "AppIconBold",
+      promotedDate: null,
+    },
+  };
+  const get = vi.fn((path: string, query: Record<string, unknown> = {}) => {
+    if (path === "/v1/apps/123/appStoreVersionExperimentsV2") {
+      return Promise.resolve({
+        data: [
+          {
+            ...test,
+            relationships: {
+              appStoreVersionExperimentTreatments: {
+                data: [
+                  { type: "appStoreVersionExperimentTreatments", id: "TR1" },
+                ],
+              },
+            },
+          },
+        ],
+        included: [treatment],
+        links: { self: "https://api.appstoreconnect.apple.com/v1/x" },
+        meta: { paging: { total: 1, limit: 50 } },
+      });
+    }
+    if (path === "/v2/appStoreVersionExperiments/T1") {
+      return Promise.resolve({
+        data: {
+          ...test,
+          relationships: { app: { data: { type: "apps", id: "123" } } },
+        },
+      });
+    }
+    if (
+      path ===
+      "/v2/appStoreVersionExperiments/T1/appStoreVersionExperimentTreatments"
+    ) {
+      return Promise.resolve({ data: [treatment] });
+    }
+    if (path === "/v1/appStoreVersionExperimentTreatments/TR1") {
+      return Promise.resolve({
+        data: {
+          ...treatment,
+          relationships: {
+            appStoreVersionExperimentV2: {
+              data: { type: "appStoreVersionExperiments", id: "T1" },
+            },
+          },
+        },
+      });
+    }
+    if (
+      path ===
+      "/v1/appStoreVersionExperimentTreatments/TR1/appStoreVersionExperimentTreatmentLocalizations"
+    ) {
+      return Promise.resolve({
+        data: [
+          {
+            type: "appStoreVersionExperimentTreatmentLocalizations",
+            id: "TL1",
+            attributes: { locale: "en-US" },
+          },
+          {
+            type: "appStoreVersionExperimentTreatmentLocalizations",
+            id: "TL2",
+            attributes: { locale: "ja" },
+          },
+        ],
+      });
+    }
+    if (
+      path.startsWith("/v1/appStoreVersionExperimentTreatmentLocalizations/")
+    ) {
+      return Promise.resolve({ data: [] });
+    }
+    if (path === "/v1/reviewSubmissions") {
+      return Promise.resolve({
+        data: drafts.map(({ id }) => ({ type: "reviewSubmissions", id })),
+      });
+    }
+    const draft = drafts.find(
+      ({ id }) => path === `/v1/reviewSubmissions/${id}/items`,
+    );
+    if (draft) return Promise.resolve({ data: draft.items });
+    return baseGet?.(path, query as AscQuery) as never;
+  });
+  const basePost = vi.mocked(base.client.post).getMockImplementation();
+  let created = 0;
+  const post = vi.fn((path: string, body: unknown) => {
+    if (path === "/v2/appStoreVersionExperiments") {
+      return Promise.resolve({
+        data: {
+          ...test,
+          id: "T2",
+          attributes: { ...test.attributes, name: "New" },
+        },
+      });
+    }
+    if (path === "/v1/appStoreVersionExperimentTreatments") {
+      created += 1;
+      const { data } = body as { data: { attributes: object } };
+      return Promise.resolve({
+        data: {
+          type: "appStoreVersionExperimentTreatments",
+          id: `NT${created}`,
+          attributes: data.attributes,
+        },
+      });
+    }
+    if (path === "/v1/appStoreVersionExperimentTreatmentLocalizations") {
+      created += 1;
+      return Promise.resolve({
+        data: {
+          type: "appStoreVersionExperimentTreatmentLocalizations",
+          id: `NL${created}`,
+        },
+      });
+    }
+    if (path === "/v1/reviewSubmissions") {
+      return Promise.resolve({
+        data: { type: "reviewSubmissions", id: "RS9" },
+      });
+    }
+    if (path === "/v1/reviewSubmissionItems") {
+      return Promise.resolve({
+        data: { type: "reviewSubmissionItems", id: "RI1" },
+      });
+    }
+    return basePost?.(path, body) as never;
+  });
+  const patch = vi.fn((path: string, body: unknown) => {
+    if (path.startsWith("/v1/reviewSubmissions/")) {
+      return Promise.resolve({
+        data: {
+          type: "reviewSubmissions",
+          id: path.split("/").pop(),
+          attributes: { state: "WAITING_FOR_REVIEW" },
+        },
+      });
+    }
+    const { started } = (body as { data: { attributes: { started: boolean } } })
+      .data.attributes;
+    return Promise.resolve({
+      data: {
+        ...test,
+        attributes: {
+          ...test.attributes,
+          state: started ? "APPROVED" : "STOPPED",
+          startDate: "2026-11-20T00:00:00Z",
+        },
+      },
+    });
+  });
+  const client: AscClient = {
+    ...base.client,
+    get: get as AscClient["get"],
+    post: post as AscClient["post"],
+    patch: patch as AscClient["patch"],
+  };
+  return { client, provider: vi.fn<AscClientProvider>(() => client) };
+}
+
+const TEST_T1 = {
+  id: "T1",
+  name: "Icon test",
+  platform: "IOS",
+  state: "PREPARE_FOR_SUBMISSION",
+  trafficProportion: 30,
+  reviewRequired: true,
+  startDate: null,
+  endDate: null,
+};
+
+describe("page-tests", () => {
+  it("should list an app's tests with their treatments, filtered by state", async () => {
+    const { client, provider } = pageTestsClient();
+    const result = await run(
+      ["page-tests", "123", "--state", "APPROVED,COMPLETED"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/apps/123/appStoreVersionExperimentsV2",
+      expect.objectContaining({
+        "filter[state]": ["APPROVED", "COMPLETED"],
+        include: "appStoreVersionExperimentTreatments",
+        limit: 50,
+      }),
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      tests: [
+        {
+          ...TEST_T1,
+          treatments: [
+            {
+              id: "TR1",
+              name: "Bold",
+              appIconName: "AppIconBold",
+              promotedDate: null,
+            },
+          ],
+        },
+      ],
+      total: 1,
+      hasMore: false,
+    });
+  });
+
+  it("should reject an unknown state", async () => {
+    const { client, provider } = pageTestsClient();
+    const result = await run(
+      ["page-tests", "123", "--state", "RUNNING"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+
+  it("should show a test's treatments and their locales", async () => {
+    const { provider } = pageTestsClient();
+    const result = await run(["page-tests", "show", "T1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      test: TEST_T1,
+      treatments: [
+        {
+          id: "TR1",
+          name: "Bold",
+          appIconName: "AppIconBold",
+          promotedDate: null,
+          localizations: [
+            { id: "TL1", locale: "en-US" },
+            { id: "TL2", locale: "ja" },
+          ],
+        },
+      ],
+    });
+  });
+});
+
+describe("page-tests create", () => {
+  const args = [
+    "page-tests",
+    "create",
+    "123",
+    "--name",
+    "New",
+    "--traffic-proportion",
+    "30",
+    "--treatment",
+    "Bold=AppIconBold",
+    "--treatment",
+    "Calm",
+    "--locale",
+    "en-US,ja",
+  ];
+
+  it("should show the test and how many tests are open without --yes", async () => {
+    const { client, provider } = pageTestsClient();
+    const result = await run(args, provider);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("Dry run");
+    expect(client.post).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "create",
+      appId: "123",
+      test: {
+        name: "New",
+        platform: "IOS",
+        trafficProportion: 30,
+        treatments: [
+          { name: "Bold", appIconName: "AppIconBold" },
+          { name: "Calm", appIconName: null },
+        ],
+        locales: ["en-US", "ja"],
+      },
+      openTests: 1,
+    });
+  });
+
+  it("should create the test, its treatments and their locales with --yes", async () => {
+    const { client, provider } = pageTestsClient();
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v2/appStoreVersionExperiments", {
+      data: {
+        type: "appStoreVersionExperiments",
+        attributes: { name: "New", platform: "IOS", trafficProportion: 30 },
+        relationships: { app: { data: { type: "apps", id: "123" } } },
+      },
+    });
+    expect(client.post).toHaveBeenCalledWith(
+      "/v1/appStoreVersionExperimentTreatments",
+      {
+        data: {
+          type: "appStoreVersionExperimentTreatments",
+          attributes: { name: "Bold", appIconName: "AppIconBold" },
+          relationships: {
+            appStoreVersionExperimentV2: {
+              data: { type: "appStoreVersionExperiments", id: "T2" },
+            },
+          },
+        },
+      },
+    );
+    expect(client.post).toHaveBeenCalledWith(
+      "/v1/appStoreVersionExperimentTreatmentLocalizations",
+      {
+        data: {
+          type: "appStoreVersionExperimentTreatmentLocalizations",
+          attributes: { locale: "ja" },
+          relationships: {
+            appStoreVersionExperimentTreatment: {
+              data: { type: "appStoreVersionExperimentTreatments", id: "NT1" },
+            },
+          },
+        },
+      },
+    );
+    const output = JSON.parse(result.stdout);
+    expect(output.test.id).toBe("T2");
+    expect(output.treatments).toEqual([
+      {
+        id: "NT1",
+        name: "Bold",
+        appIconName: "AppIconBold",
+        promotedDate: null,
+        localizations: [
+          { id: "NL2", locale: "en-US" },
+          { id: "NL3", locale: "ja" },
+        ],
+      },
+      {
+        id: "NT4",
+        name: "Calm",
+        appIconName: null,
+        promotedDate: null,
+        localizations: [
+          { id: "NL5", locale: "en-US" },
+          { id: "NL6", locale: "ja" },
+        ],
+      },
+    ]);
+  });
+
+  it("should say what was created when a later step fails", async () => {
+    const { client, provider } = pageTestsClient();
+    const post = vi.mocked(client.post).getMockImplementation();
+    vi.mocked(client.post).mockImplementation((path, body) =>
+      path === "/v1/appStoreVersionExperimentTreatmentLocalizations"
+        ? Promise.reject(
+            new AscApiError(409, { errors: [{ code: "ENTITY_ERROR" }] }),
+          )
+        : (post?.(path, body) as never),
+    );
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("Test T2 was created");
+    expect(result.stderr).toContain("Bold (NT1)");
+  });
+
+  it("should need a name, a traffic proportion and at most three treatments", async () => {
+    const { client, provider } = pageTestsClient();
+    const result = await run(
+      [
+        "page-tests",
+        "create",
+        "123",
+        "--traffic-proportion",
+        "150",
+        ...["A", "B", "C", "D"].flatMap((name) => ["--treatment", name]),
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("--name");
+    expect(result.stderr).toContain("at most 3 treatments");
+    expect(result.stderr).toContain("trafficProportion");
+    expect(result.stderr).toContain("at least one --locale");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("page-tests upload", () => {
+  it("should place each file on the treatment's localization with --yes", async () => {
+    const { client, provider } = pageTestsClient();
+    const dir = await mkdtemp(join(tmpdir(), "asc-page-tests-"));
+    await mkdir(join(dir, "ja"));
+    await writeFile(join(dir, "ja", "1.png"), png(1290, 2796));
+    const dry = await run(
+      ["page-tests", "upload", "TR1", "--dir", dir],
+      provider,
+    );
+    expect(dry.exitCode).toBe(0);
+    expect(client.post).not.toHaveBeenCalled();
+    expect(JSON.parse(dry.stdout).files).toEqual([
+      {
+        locale: "ja",
+        file: "1.png",
+        placementType: "APP_SCREENSHOT",
+        placementGroup: IPHONE,
+        fileSize: 33,
+      },
+    ]);
+    vi.mocked(console.log).mockClear();
+    const result = await run(
+      ["page-tests", "upload", "TR1", "--dir", dir, "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/appStoreVersionExperimentTreatmentLocalizations/TL2/placements",
+      expect.anything(),
+    );
+    expect(client.post).toHaveBeenCalledWith("/v1/appAssetLibraryPlacements", {
+      data: {
+        type: "appAssetLibraryPlacements",
+        attributes: { placementType: "APP_SCREENSHOT", placementGroup: IPHONE },
+        relationships: {
+          image: { data: { type: "appAssetLibraryImages", id: "A1" } },
+          appStoreVersionExperimentTreatmentLocalization: {
+            data: {
+              type: "appStoreVersionExperimentTreatmentLocalizations",
+              id: "TL2",
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("should refuse a test in review", async () => {
+    const { client, provider } = pageTestsClient({ state: "IN_REVIEW" });
+    const result = await run(
+      ["page-tests", "upload", "TR1", "--dir", "/nonexistent", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[invalid_input] Product page test Icon test is IN_REVIEW",
+    );
+    expect(client.post).not.toHaveBeenCalled();
+  });
+});
+
+describe("page-tests submit", () => {
+  it("should only show the test and submission without --yes", async () => {
+    const { client, provider } = pageTestsClient();
+    const result = await run(["page-tests", "submit", "T1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.post).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "submit",
+      test: TEST_T1,
+      reviewSubmissionId: null,
+    });
+  });
+
+  it("should add the test to a new submission and submit it with --yes", async () => {
+    const { client, provider } = pageTestsClient();
+    const result = await run(["page-tests", "submit", "T1", "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v1/reviewSubmissionItems", {
+      data: {
+        type: "reviewSubmissionItems",
+        relationships: {
+          reviewSubmission: { data: { type: "reviewSubmissions", id: "RS9" } },
+          appStoreVersionExperimentV2: {
+            data: { type: "appStoreVersionExperiments", id: "T1" },
+          },
+        },
+      },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "submit",
+      testId: "T1",
+      reviewSubmissionId: "RS9",
+      state: "WAITING_FOR_REVIEW",
+    });
+  });
+
+  it("should refuse a draft submission with other items", async () => {
+    const { client, provider } = pageTestsClient({
+      drafts: [
+        {
+          id: "RS1",
+          items: [
+            {
+              type: "reviewSubmissionItems",
+              id: "RI1",
+              relationships: { appStoreVersionExperimentV2: { data: null } },
+            },
+          ],
+        },
+      ],
+    });
+    const result = await run(["page-tests", "submit", "T1", "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("1 other item(s)");
+    expect(client.post).not.toHaveBeenCalled();
+  });
+});
+
+describe("page-tests start and stop", () => {
+  it("should start an approved test with --yes", async () => {
+    const { client, provider } = pageTestsClient({ state: "APPROVED" });
+    const dry = await run(["page-tests", "start", "T1"], provider);
+    expect(dry.exitCode).toBe(0);
+    expect(client.patch).not.toHaveBeenCalled();
+    vi.mocked(console.log).mockClear();
+    const result = await run(["page-tests", "start", "T1", "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledWith(
+      "/v2/appStoreVersionExperiments/T1",
+      {
+        data: {
+          type: "appStoreVersionExperiments",
+          id: "T1",
+          attributes: { started: true },
+        },
+      },
+    );
+    expect(JSON.parse(result.stdout).test.startDate).toBe(
+      "2026-11-20T00:00:00Z",
+    );
+  });
+
+  it("should refuse to start a test that still needs review", async () => {
+    const { client, provider } = pageTestsClient();
+    const result = await run(["page-tests", "start", "T1", "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "is PREPARE_FOR_SUBMISSION, so it cannot start",
+    );
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should start a test that needs no review", async () => {
+    const { provider } = pageTestsClient({ reviewRequired: false });
+    const result = await run(["page-tests", "start", "T1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout).dryRun).toBe(true);
+  });
+
+  it("should refuse to start a test that already started", async () => {
+    const { client, provider } = pageTestsClient({
+      state: "APPROVED",
+      startDate: "2026-11-20T00:00:00Z",
+    });
+    const result = await run(["page-tests", "start", "T1", "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("already started on 2026-11-20T00:00:00Z");
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should show a running test without stopping it when --yes is missing", async () => {
+    const { client, provider } = pageTestsClient({
+      state: "APPROVED",
+      startDate: "2026-11-20T00:00:00Z",
+    });
+    const result = await run(["page-tests", "stop", "T1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout).dryRun).toBe(true);
+    expect(result.stderr).toContain("Dry run");
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should stop a running test with --yes", async () => {
+    const { client, provider } = pageTestsClient({
+      state: "APPROVED",
+      startDate: "2026-11-20T00:00:00Z",
+    });
+    const result = await run(["page-tests", "stop", "T1", "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledWith(
+      "/v2/appStoreVersionExperiments/T1",
+      {
+        data: {
+          type: "appStoreVersionExperiments",
+          id: "T1",
+          attributes: { started: false },
+        },
+      },
+    );
+    expect(JSON.parse(result.stdout).test.state).toBe("STOPPED");
+  });
+
+  it("should refuse to stop a test that already ended", async () => {
+    const { client, provider } = pageTestsClient({
+      state: "STOPPED",
+      startDate: "2026-11-20T00:00:00Z",
+    });
+    const result = await run(["page-tests", "stop", "T1", "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("is already STOPPED");
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should refuse to stop a test that has not started", async () => {
+    const { client, provider } = pageTestsClient({ state: "APPROVED" });
+    const result = await run(["page-tests", "stop", "T1", "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("has not started");
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+});

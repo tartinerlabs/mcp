@@ -471,14 +471,23 @@ export const submitCustomPageInput = z.object({
   yes: z.boolean().default(false),
 });
 
+/** An item that goes for review: its review submission item relationship and resource. */
+export interface ReviewItem {
+  relationship: "appCustomProductPageVersion" | "appStoreVersionExperimentV2";
+  type: string;
+  id: string;
+}
+
 /**
- * The app's review submission being prepared for the platform, with the page
- * versions in it and how many other items it holds.
+ * The app's review submission being prepared for the platform, if any, and
+ * whether it already holds the item. Throws when it holds anything else,
+ * which submitting would send for review too.
  */
-async function draftSubmission(
+export async function reviewDraft(
   client: AscClient,
   appId: string,
   platform: string,
+  item: ReviewItem,
 ) {
   const drafts = await client.get<AscDocument<unknown>>(
     "/v1/reviewSubmissions",
@@ -491,21 +500,76 @@ async function draftSubmission(
     },
   );
   const draft = drafts.data[0];
-  if (!draft) return undefined;
+  if (!draft) return { id: undefined, alreadyAdded: false };
   const items = await client.get<AscDocument<unknown>>(
     `/v1/reviewSubmissions/${draft.id}/items`,
     {
-      "fields[reviewSubmissionItems]": ["state", "appCustomProductPageVersion"],
+      "fields[reviewSubmissionItems]": ["state", item.relationship],
       limit: 200,
     },
   );
-  const pageVersions = items.data.flatMap(
-    (item) => item.relationships?.appCustomProductPageVersion?.data?.id ?? [],
+  const alreadyAdded = items.data.some(
+    (entry) => entry.relationships?.[item.relationship]?.data?.id === item.id,
   );
+  const others = items.data.length - (alreadyAdded ? 1 : 0);
+  if (others > 0) {
+    throw new InvalidInputError(
+      `The app's ${platform} review submission ${draft.id} is being prepared with ${others} other item(s), which submitting would send for review too. Submit or remove them in App Store Connect first.`,
+    );
+  }
+  return { id: draft.id, alreadyAdded };
+}
+
+/**
+ * Adds the item to the draft from `reviewDraft`, or to a new review
+ * submission, and submits it.
+ */
+export async function submitForReview(
+  client: AscClient,
+  appId: string,
+  platform: string,
+  draft: Awaited<ReturnType<typeof reviewDraft>>,
+  item: ReviewItem,
+) {
+  let submissionId = draft.id;
+  if (!submissionId) {
+    const created = await client.post<{ data: AscResource }>(
+      "/v1/reviewSubmissions",
+      {
+        data: {
+          type: "reviewSubmissions",
+          attributes: { platform },
+          relationships: { app: { data: { type: "apps", id: appId } } },
+        },
+      },
+    );
+    submissionId = created.data.id;
+  }
+  if (!draft.alreadyAdded) {
+    await client.post("/v1/reviewSubmissionItems", {
+      data: {
+        type: "reviewSubmissionItems",
+        relationships: {
+          reviewSubmission: {
+            data: { type: "reviewSubmissions", id: submissionId },
+          },
+          [item.relationship]: { data: { type: item.type, id: item.id } },
+        },
+      },
+    });
+  }
+  const submitted = await client.patch<{
+    data: AscResource<{ state?: string }>;
+  }>(`/v1/reviewSubmissions/${submissionId}`, {
+    data: {
+      type: "reviewSubmissions",
+      id: submissionId,
+      attributes: { submitted: true },
+    },
+  });
   return {
-    id: draft.id,
-    pageVersions,
-    otherItems: items.data.length - pageVersions.length,
+    reviewSubmissionId: submissionId,
+    state: submitted?.data?.attributes?.state,
   };
 }
 
@@ -525,69 +589,25 @@ export async function submitCustomPage(
     );
   }
   const appId = await pageAppId(client, version.pageId);
-  const draft = await draftSubmission(client, appId, input.platform);
-  const others = draft
-    ? draft.otherItems +
-      draft.pageVersions.filter((id) => id !== input.versionId).length
-    : 0;
-  if (draft && others > 0) {
-    throw new InvalidInputError(
-      `The app's ${input.platform} review submission ${draft.id} is being prepared with ${others} other item(s), which submitting would send for review too. Submit or remove them in App Store Connect first.`,
-    );
-  }
-  const alreadyAdded = draft?.pageVersions.includes(input.versionId) === true;
+  const item = {
+    relationship: "appCustomProductPageVersion",
+    type: "appCustomProductPageVersions",
+    id: input.versionId,
+  } as const;
+  const draft = await reviewDraft(client, appId, input.platform, item);
   if (!input.yes) {
     return {
       dryRun: true,
       action: "submit",
       version,
       platform: input.platform,
-      reviewSubmissionId: draft?.id ?? null,
+      reviewSubmissionId: draft.id ?? null,
     };
   }
-  let submissionId = draft?.id;
-  if (!submissionId) {
-    const created = await client.post<{ data: AscResource }>(
-      "/v1/reviewSubmissions",
-      {
-        data: {
-          type: "reviewSubmissions",
-          attributes: { platform: input.platform },
-          relationships: { app: { data: { type: "apps", id: appId } } },
-        },
-      },
-    );
-    submissionId = created.data.id;
-  }
-  if (!alreadyAdded) {
-    await client.post("/v1/reviewSubmissionItems", {
-      data: {
-        type: "reviewSubmissionItems",
-        relationships: {
-          reviewSubmission: {
-            data: { type: "reviewSubmissions", id: submissionId },
-          },
-          appCustomProductPageVersion: {
-            data: { type: "appCustomProductPageVersions", id: input.versionId },
-          },
-        },
-      },
-    });
-  }
-  const submitted = await client.patch<{
-    data: AscResource<{ state?: string }>;
-  }>(`/v1/reviewSubmissions/${submissionId}`, {
-    data: {
-      type: "reviewSubmissions",
-      id: submissionId,
-      attributes: { submitted: true },
-    },
-  });
   return {
     dryRun: false,
     action: "submit",
     versionId: input.versionId,
-    reviewSubmissionId: submissionId,
-    state: submitted?.data?.attributes?.state,
+    ...(await submitForReview(client, appId, input.platform, draft, item)),
   };
 }

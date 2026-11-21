@@ -51,7 +51,7 @@ export class InvalidInputError extends Error {
   override name = "InvalidInputError";
 }
 
-/** Thrown when an upload stops partway; its message says what was already done and its cause why it stopped. */
+/** Thrown when an upload or another multi-step write stops partway; its message says what was already done and its cause why it stopped. */
 export class UploadIncompleteError extends Error {
   override name = "UploadIncompleteError";
 }

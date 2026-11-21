@@ -80,10 +80,11 @@ function shapePlacement(
   };
 }
 
-/** Where placements go: an App Store version's localizations or a custom product page version's. */
+/** Where placements go: an App Store version's localizations, a custom product page version's or a product page test treatment's. */
 type LocalizationType =
   | "appStoreVersionLocalizations"
-  | "appCustomProductPageLocalizations";
+  | "appCustomProductPageLocalizations"
+  | "appStoreVersionExperimentTreatmentLocalizations";
 
 /** A localization's screenshots and previews in display order. */
 async function listPlacements(
@@ -332,7 +333,8 @@ export interface UploadTarget {
   /** The placement's relationship to the localization. */
   relationship:
     | "appStoreVersionLocalization"
-    | "appCustomProductPageLocalization";
+    | "appCustomProductPageLocalization"
+    | "appStoreVersionExperimentTreatmentLocalization";
   /**
    * The ref data feature whose group limits apply; App Store versions' limits
    * are used when Apple lists none for it.
