@@ -1,3 +1,14 @@
+## [0.22.0](https://github.com/tartinerlabs/mcp/compare/v0.21.0...v0.22.0) (2026-11-21)
+
+### Features
+
+* **asc:** manage custom product pages ([bc3db77](https://github.com/tartinerlabs/mcp/commit/bc3db77225894d0af0fae1e7ee5b9e24f77335a2))
+* **asc:** manage in-app events ([15602cd](https://github.com/tartinerlabs/mcp/commit/15602cd674375f0f8063d4edf41ae4e6a3f946e6))
+* **asc:** read and edit version metadata and app info localisations ([b211920](https://github.com/tartinerlabs/mcp/commit/b2119206c22f8a25a112033300400dc0f88814ef))
+* **asc:** read pricing and manage availability and age rating ([a8ae5e1](https://github.com/tartinerlabs/mcp/commit/a8ae5e15ed987f0558294c18d9caaa8a27070785))
+* **asc:** run product page optimization tests ([0c0de58](https://github.com/tartinerlabs/mcp/commit/0c0de58f18c19cfccb2cd38155ca1b1339388afc))
+* **asc:** upload screenshots and app previews ([06e854c](https://github.com/tartinerlabs/mcp/commit/06e854cc4d878215aef37a582376345911f1f4a2))
+
 ## [0.21.0](https://github.com/tartinerlabs/mcp/compare/v0.20.0...v0.21.0) (2026-11-21)
 
 ### Features
