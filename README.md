@@ -246,6 +246,10 @@ node apps/index-now/dist/index.js submit https://example.com/new-page --key <key
 | `testflight groups <app-id>` | An app's TestFlight groups: internal or external (`--internal`, `--no-internal`), whether the group gets every build, and its feedback and public link settings. |
 | `testflight testers <app-id>` | An app's TestFlight testers, or one group's (`--group <group-id>`): name, email, how they were invited (`EMAIL` or `PUBLIC_LINK`, `--invite-type`) and their state, such as `INVITED`, `INSTALLED` or `REVOKED`. |
 | `testflight feedback <app-id> --type crash` | Feedback testers sent from TestFlight, newest first: crash reports (`--type crash`) or screenshot feedback (`--type screenshot`), with the comment, build, device and OS. `--build <build-id>` narrows it to one build. Tester emails are left out. |
+| `testflight groups add-build <group-id> <build-id>` | Lets a group test a build. An external group only gets a build that passed beta review. |
+| `testflight testers add <group-id> --email <emails>` | Adds testers to a group by email (comma-separated or repeated, up to 50). Someone already testing the app joins the group; anyone else gets an invitation email. Internal groups only take App Store Connect users. |
+| `testflight testers remove <group-id> --email <emails>` | Removes testers from a group by email; they can no longer test the group's builds. |
+| `testflight notes <build-id> --locale en-US --body <text>` | Sets a build's "What to Test" notes for one language (`--body-file <path>` reads them from a file), creating that language's notes if the build has none. |
 | `reviews <app-id>` | Customer reviews filtered by star rating, territory and whether a response exists, with your response. |
 | `reviews reply <review-id> --body <text>` | Posts a public developer response to a review (or `--body-file <path>`), replacing your existing one. Apple publishes it after a delay. |
 | `reviews delete-reply <review-id>` | Deletes your developer response to a review. |
@@ -253,7 +257,7 @@ node apps/index-now/dist/index.js submit https://example.com/new-page --key <key
 
 Each list command returns one page (up to 200, `--limit`) and reports `hasMore`; when there is more, pass the result's `nextCursor` back as `--cursor` to read the next page. A 429 from Apple is reported as `[quota]` at once, without retrying, except in `builds wait`, which backs off (1 minute, doubling up to 10) and keeps waiting. Run a command with `--help` for its filters.
 
-Commands that change anything (`builds compliance`, `reviews reply`, `reviews delete-reply`) only print what they would do, with `"dryRun": true`, unless given `--yes`. A dry run still reads from App Store Connect, so it shows the build's current answer, or the review and any reply that would be replaced or deleted. They need a key whose role allows the change: App Manager, or Customer Support for review replies. A key without it gets a `[permission]` error.
+Commands that change anything (`builds compliance`, `testflight groups add-build`, `testflight testers add` and `remove`, `testflight notes`, `reviews reply`, `reviews delete-reply`) only print what they would do, with `"dryRun": true`, unless given `--yes`. A dry run still reads from App Store Connect, so it shows the build's current answer or notes, what would happen to each tester email, or the review and any reply that would be replaced or deleted. They need a key whose role allows the change: App Manager, or Customer Support for review replies. A key without it gets a `[permission]` error.
 
 Setting `ITSAppUsesNonExemptEncryption` in the app's `Info.plist` answers the export compliance question for every build uploaded after it, so most apps only need `builds compliance` for builds already uploaded without it.
 

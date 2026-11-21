@@ -23,6 +23,10 @@ import {
 import { listReviews, reviewsInput } from "./commands/reviews.ts";
 import { getStatus, statusInput } from "./commands/status.ts";
 import {
+  addBuildInput,
+  addBuildToGroup,
+  addTesters,
+  addTestersInput,
   betaFeedbackInput,
   betaGroupsInput,
   betaTestersInput,
@@ -30,6 +34,10 @@ import {
   listBetaFeedback,
   listBetaGroups,
   listBetaTesters,
+  notesInput,
+  removeTesters,
+  removeTestersInput,
+  setBuildNotes,
 } from "./commands/testflight.ts";
 import { listVersions, versionsInput } from "./commands/versions.ts";
 import { PLATFORMS } from "./schemas/common.ts";
@@ -58,10 +66,11 @@ function stderr(command: Command): (text: string) => void {
   );
 }
 
-/** The reply text from --body or the file named by --body-file. */
+/** The text from --body or the file named by --body-file; `what` names it in errors. */
 async function readBody(
   command: Command,
   options: { body?: string; bodyFile?: string },
+  what: string,
 ): Promise<string> {
   if (options.body !== undefined && options.bodyFile !== undefined) {
     return command.error(
@@ -71,7 +80,7 @@ async function readBody(
   if (options.body !== undefined) return options.body;
   if (options.bodyFile === undefined) {
     return command.error(
-      "[invalid_input] Give the reply text with --body or --body-file.",
+      `[invalid_input] Give the ${what} with --body or --body-file.`,
     );
   }
   try {
@@ -81,6 +90,17 @@ async function readBody(
       `[invalid_input] Could not read the --body-file ${options.bodyFile}.`,
     );
   }
+}
+
+/** Collects a repeatable, comma-separated option such as --email a,b --email c. */
+function collectList(value: string, previous: string[] = []): string[] {
+  return [
+    ...previous,
+    ...value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean),
+  ];
 }
 
 /** Clock and sleep for `builds wait`; tests pass fakes. */
@@ -101,7 +121,7 @@ export function createProgram(
   const program = new Command()
     .name("asc")
     .description(
-      "App Store Connect with your own API key: apps, versions, builds, release status, TestFlight groups, testers and feedback, and customer reviews. Commands that change anything only print what they would do unless given --yes.",
+      "App Store Connect with your own API key: apps, versions, builds, release status, TestFlight groups, testers, feedback and notes, and customer reviews. Commands that change anything only print what they would do unless given --yes.",
     )
     .version(pkg.version)
     .option("--key-id <id>", "API key ID (default: ASC_KEY_ID)")
@@ -295,10 +315,10 @@ export function createProgram(
   const testflight = program
     .command("testflight")
     .description(
-      "TestFlight: an app's beta groups, testers, and the feedback testers sent.",
+      "TestFlight: an app's beta groups, testers and the feedback they sent, plus a build's What to Test notes. Commands that change anything need a key with the App Manager role.",
     );
 
-  testflight
+  const groups = testflight
     .command("groups")
     .description(
       "An app's TestFlight groups by name: internal or external, whether it gets every build, feedback and public link settings. List a group's builds with builds --group and its testers with testflight testers --group.",
@@ -317,7 +337,26 @@ export function createProgram(
       );
     });
 
-  testflight
+  groups
+    .command("add-build")
+    .description(
+      "Let a group test a build. An external group can only get a build that passed beta review. Without --yes, prints the group, the build and whether the group already has it.",
+    )
+    .argument("<group-id>", "group id from testflight groups")
+    .argument("<build-id>", "build id from the builds command")
+    .option(...YES)
+    .action(
+      async (group: string, buildId: string, options, command: Command) => {
+        await runWrite(
+          command,
+          addBuildInput,
+          { group, buildId, yes: options.yes },
+          addBuildToGroup,
+        );
+      },
+    );
+
+  const testers = testflight
     .command("testers")
     .description(
       "An app's TestFlight testers by last name: name, email, how they were invited (EMAIL or PUBLIC_LINK) and their state, such as INVITED, ACCEPTED or INSTALLED.",
@@ -341,6 +380,48 @@ export function createProgram(
         betaTestersInput,
         { appId, ...options },
         listBetaTesters,
+      );
+    });
+
+  testers
+    .command("add")
+    .description(
+      "Add testers to a group by email. Someone already testing the app joins the group; anyone else gets an invitation email. Internal groups only take App Store Connect users. Without --yes, prints what would happen to each email.",
+    )
+    .argument("<group-id>", "group id from testflight groups")
+    .option(
+      "--email <emails>",
+      "tester emails, comma-separated or repeated (up to 50)",
+      collectList,
+    )
+    .option(...YES)
+    .action(async (group: string, options, command: Command) => {
+      await runWrite(
+        command,
+        addTestersInput,
+        { group, emails: options.email ?? [], yes: options.yes },
+        addTesters,
+      );
+    });
+
+  testers
+    .command("remove")
+    .description(
+      "Remove testers from a group by email; they can no longer test the group's builds. Without --yes, prints which of the emails are in the group.",
+    )
+    .argument("<group-id>", "group id from testflight groups")
+    .option(
+      "--email <emails>",
+      "tester emails, comma-separated or repeated (up to 50)",
+      collectList,
+    )
+    .option(...YES)
+    .action(async (group: string, options, command: Command) => {
+      await runWrite(
+        command,
+        removeTestersInput,
+        { group, emails: options.email ?? [], yes: options.yes },
+        removeTesters,
       );
     });
 
@@ -368,6 +449,29 @@ export function createProgram(
         betaFeedbackInput,
         { appId, ...options },
         listBetaFeedback,
+      );
+    });
+
+  testflight
+    .command("notes")
+    .description(
+      "Set a build's What to Test notes for one language, which testers see in TestFlight. Without --yes, prints the current notes and the new ones.",
+    )
+    .argument("<build-id>", "build id from the builds command")
+    .option(
+      "--locale <locale>",
+      "the notes' language, such as en-US (required)",
+    )
+    .option("--body <text>", "the notes, up to 4000 characters")
+    .option("--body-file <path>", "read the notes from this file")
+    .option(...YES)
+    .action(async (buildId: string, options, command: Command) => {
+      const whatsNew = await readBody(command, options, "notes");
+      await runWrite(
+        command,
+        notesInput,
+        { buildId, locale: options.locale, whatsNew, yes: options.yes },
+        setBuildNotes,
       );
     });
 
@@ -411,7 +515,7 @@ export function createProgram(
     .option("--body-file <path>", "read the reply text from this file")
     .option(...YES)
     .action(async (reviewId: string, options, command: Command) => {
-      const body = await readBody(command, options);
+      const body = await readBody(command, options, "reply text");
       await runWrite(
         command,
         replyInput,

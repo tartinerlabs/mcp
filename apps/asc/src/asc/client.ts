@@ -35,12 +35,18 @@ export type AscQuery = Record<
 /** The App Store Connect operations the commands depend on. */
 export interface AscClient {
   get<T>(path: string, query?: AscQuery): Promise<T>;
-  /** Sends a JSON:API body; resolves to the response document. */
+  /**
+   * Sends a JSON:API body; resolves to the response document, or undefined
+   * for a 204, which relationship changes return.
+   */
   post<T>(path: string, body: unknown): Promise<T>;
   /** Updates a resource with a JSON:API body; resolves to the updated document. */
   patch<T>(path: string, body: unknown): Promise<T>;
-  /** Resolves when Apple answers 2xx (usually 204, with no body). */
-  delete(path: string): Promise<void>;
+  /**
+   * Resolves when Apple answers 2xx (usually 204, with no body). Removing
+   * from a relationship sends the resources to remove as the body.
+   */
+  delete(path: string, body?: unknown): Promise<void>;
 }
 
 export interface AscClientOptions {
@@ -54,6 +60,8 @@ const AUDIENCE = "appstoreconnect-v1";
 // Apple accepts up to 20 minutes; a fresh short-lived token is signed per request.
 const TOKEN_LIFETIME_S = 120;
 const TIMEOUT_MS = 30_000;
+/** What `request` returns for a 204, which has no body by design. */
+const NO_CONTENT = Symbol("no content");
 
 /** A team key names its issuer; an individual key uses `sub: "user"` instead. */
 export function tokenClaims(
@@ -79,7 +87,7 @@ export async function createAscClient(
     );
   }
 
-  /** Signs a fresh token, sends the request and returns the parsed JSON body (undefined when empty). */
+  /** Signs a fresh token, sends the request and returns the parsed JSON body (undefined when empty, NO_CONTENT for a 204). */
   async function request(
     method: "GET" | "POST" | "PATCH" | "DELETE",
     url: URL,
@@ -108,12 +116,13 @@ export async function createAscClient(
     // Some errors (e.g. 406) are plain text, not JSON:API, and a 204 has no body.
     const data: unknown = await response.json().catch(() => undefined);
     if (!response.ok) throw new AscApiError(response.status, data);
-    return data;
+    return response.status === 204 ? NO_CONTENT : data;
   }
 
-  /** A JSON body is required for GET, POST and PATCH. */
-  function json<T>(data: unknown): T {
-    if (data === undefined) {
+  /** A JSON body is required, except a POST may answer 204. */
+  function json<T>(data: unknown, allowNoContent = false): T {
+    if (data === NO_CONTENT && allowNoContent) return undefined as T;
+    if (data === undefined || data === NO_CONTENT) {
       throw new UnexpectedResponseError(
         "App Store Connect returned a response that is not JSON.",
       );
@@ -134,13 +143,13 @@ export async function createAscClient(
       return json<T>(await request("GET", url));
     },
     async post<T>(path: string, body: unknown): Promise<T> {
-      return json<T>(await request("POST", new URL(path, ASC_API), body));
+      return json<T>(await request("POST", new URL(path, ASC_API), body), true);
     },
     async patch<T>(path: string, body: unknown): Promise<T> {
       return json<T>(await request("PATCH", new URL(path, ASC_API), body));
     },
-    async delete(path: string): Promise<void> {
-      await request("DELETE", new URL(path, ASC_API));
+    async delete(path: string, body?: unknown): Promise<void> {
+      await request("DELETE", new URL(path, ASC_API), body);
     },
   };
 }
