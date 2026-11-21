@@ -1,3 +1,9 @@
+## [0.19.0](https://github.com/tartinerlabs/mcp/compare/v0.18.1...v0.19.0) (2026-11-21)
+
+### Features
+
+* **asc:** set export compliance on builds ([83b8534](https://github.com/tartinerlabs/mcp/commit/83b85343038f4af52aae2262c564d90f0161f9ae))
+
 ## [0.18.1](https://github.com/tartinerlabs/mcp/compare/v0.18.0...v0.18.1) (2026-11-21)
 
 ### Bug Fixes
