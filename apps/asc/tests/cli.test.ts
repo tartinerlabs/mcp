@@ -1,23 +1,28 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AscClient } from "../src/asc/client.ts";
+import type { AscClient, AscQuery } from "../src/asc/client.ts";
 import {
   type AscClientProvider,
   createProgram,
   type ProgramOptions,
 } from "../src/cli.ts";
-import { AscApiError, CredentialsError } from "../src/utils/errors.ts";
+import {
+  AscApiError,
+  CredentialsError,
+  UnexpectedResponseError,
+} from "../src/utils/errors.ts";
 
 /** Write methods for read-only tests: any call fails the test. */
-function noWrites(): Pick<AscClient, "post" | "patch" | "delete"> {
+function noWrites(): Pick<AscClient, "post" | "patch" | "delete" | "upload"> {
   const fail = () => Promise.reject(new Error("unexpected write"));
   return {
     post: vi.fn(fail) as AscClient["post"],
     patch: vi.fn(fail) as AscClient["patch"],
     delete: vi.fn(fail) as AscClient["delete"],
+    upload: vi.fn(fail) as AscClient["upload"],
   };
 }
 
@@ -959,6 +964,7 @@ describe("reviews reply and delete-reply", () => {
   /** A client that reads the review and records writes. */
   function writable(responseId?: string, post?: () => Promise<unknown>) {
     const client: AscClient = {
+      ...noWrites(),
       get: vi.fn(() =>
         Promise.resolve(reviewDocument(responseId)),
       ) as AscClient["get"],
@@ -1664,6 +1670,7 @@ function testflightClient({
     return Promise.reject(new Error(`unexpected GET ${path}`));
   });
   const client: AscClient = {
+    ...noWrites(),
     get: get as AscClient["get"],
     post: vi.fn((path: string) =>
       Promise.resolve(
@@ -2074,5 +2081,3883 @@ describe("testflight notes", () => {
       "Give the notes with --body or --body-file.",
     );
     expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+/** A client for the metadata commands: `get` answers by path. */
+function metadataClient({
+  versionState = "PREPARE_FOR_SUBMISSION",
+  appInfoState = "PREPARE_FOR_SUBMISSION",
+}: {
+  versionState?: string;
+  appInfoState?: string;
+} = {}) {
+  const versionLocalization = {
+    type: "appStoreVersionLocalizations",
+    id: "VL1",
+    attributes: {
+      locale: "en-US",
+      description: "Old description",
+      keywords: "one,two",
+      promotionalText: null,
+      whatsNew: "Bug fixes",
+      supportUrl: "https://example.com/support",
+      marketingUrl: null,
+    },
+  };
+  const appInfoLocalization = {
+    type: "appInfoLocalizations",
+    id: "AL1",
+    attributes: {
+      locale: "en-US",
+      name: "Example",
+      subtitle: "Old subtitle",
+      privacyPolicyUrl: "https://example.com/privacy",
+      privacyChoicesUrl: null,
+      privacyPolicyText: null,
+    },
+  };
+  const byLocale = (item: { attributes: { locale: string } }, query = {}) => {
+    const locale = (query as Record<string, unknown>)["filter[locale]"];
+    return {
+      data:
+        locale === undefined || locale === item.attributes.locale ? [item] : [],
+    };
+  };
+  const get = vi.fn((path: string, query: Record<string, unknown> = {}) => {
+    if (path === "/v1/appStoreVersions/V1") {
+      return Promise.resolve({
+        data: {
+          type: "appStoreVersions",
+          id: "V1",
+          attributes: {
+            platform: "IOS",
+            versionString: "2.4",
+            appVersionState: versionState,
+          },
+        },
+      });
+    }
+    if (path === "/v1/appStoreVersions/V1/appStoreVersionLocalizations") {
+      return Promise.resolve(byLocale(versionLocalization, query));
+    }
+    if (path === "/v1/apps/123/appInfos") {
+      return Promise.resolve({
+        data: [
+          {
+            type: "appInfos",
+            id: "AI1",
+            attributes: { state: appInfoState, appStoreAgeRating: "FOUR_PLUS" },
+            relationships: {
+              primaryCategory: {
+                data: { type: "appCategories", id: "PRODUCTIVITY" },
+              },
+              secondaryCategory: { data: null },
+            },
+          },
+        ],
+        included: [{ type: "appCategories", id: "PRODUCTIVITY" }],
+      });
+    }
+    if (path === "/v1/appInfos/AI1") {
+      return Promise.resolve({
+        data: {
+          type: "appInfos",
+          id: "AI1",
+          attributes: { state: appInfoState },
+        },
+      });
+    }
+    if (path === "/v1/appInfos/AI1/appInfoLocalizations") {
+      return Promise.resolve(byLocale(appInfoLocalization, query));
+    }
+    return Promise.reject(new Error(`unexpected GET ${path}`));
+  });
+  const client: AscClient = {
+    ...noWrites(),
+    get: get as AscClient["get"],
+    post: vi.fn(() => Promise.reject(new Error("unexpected POST"))),
+    patch: vi.fn(() => Promise.resolve({ data: {} })) as AscClient["patch"],
+    delete: vi.fn(() => Promise.reject(new Error("unexpected DELETE"))),
+  };
+  return { client, provider: vi.fn<AscClientProvider>(() => client) };
+}
+
+describe("metadata", () => {
+  it("should print the version and every locale's metadata", async () => {
+    const { client, provider } = metadataClient();
+    const result = await run(["metadata", "V1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/appStoreVersions/V1/appStoreVersionLocalizations",
+      expect.objectContaining({ limit: 200 }),
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      version: {
+        id: "V1",
+        version: "2.4",
+        platform: "IOS",
+        state: "PREPARE_FOR_SUBMISSION",
+      },
+      localizations: [
+        {
+          id: "VL1",
+          locale: "en-US",
+          description: "Old description",
+          keywords: "one,two",
+          promotionalText: null,
+          whatsNew: "Bug fixes",
+          supportUrl: "https://example.com/support",
+          marketingUrl: null,
+        },
+      ],
+    });
+  });
+
+  it("should reject an id that is not one path segment", async () => {
+    const { client, provider } = metadataClient();
+    const result = await run(["metadata", "../apps"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("metadata set", () => {
+  const args = [
+    "metadata",
+    "set",
+    "V1",
+    "--locale",
+    "en-US",
+    "--description",
+    "New description",
+    "--keywords",
+    "one,two",
+  ];
+
+  it("should show the current and new values without --yes", async () => {
+    const { client, provider } = metadataClient();
+    const result = await run(args, provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).not.toHaveBeenCalled();
+    expect(result.stderr).toContain("Dry run");
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "metadata",
+      version: {
+        id: "V1",
+        version: "2.4",
+        platform: "IOS",
+        state: "PREPARE_FOR_SUBMISSION",
+      },
+      locale: "en-US",
+      current: { description: "Old description", keywords: "one,two" },
+      update: { description: "New description", keywords: "one,two" },
+      changes: true,
+    });
+  });
+
+  it("should update only the changed fields with --yes", async () => {
+    const { client, provider } = metadataClient();
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledWith(
+      "/v1/appStoreVersionLocalizations/VL1",
+      {
+        data: {
+          type: "appStoreVersionLocalizations",
+          id: "VL1",
+          attributes: { description: "New description" },
+        },
+      },
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "metadata",
+      versionId: "V1",
+      locale: "en-US",
+      changed: ["description"],
+    });
+  });
+
+  it("should refuse a version that is no longer editable", async () => {
+    const { client, provider } = metadataClient({
+      versionState: "READY_FOR_DISTRIBUTION",
+    });
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[invalid_input] Version 2.4 is READY_FOR_DISTRIBUTION",
+    );
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should allow promotional text on a version that is live", async () => {
+    const { client, provider } = metadataClient({
+      versionState: "READY_FOR_DISTRIBUTION",
+    });
+    const result = await run(
+      [
+        "metadata",
+        "set",
+        "V1",
+        "--locale",
+        "en-US",
+        "--promotional-text",
+        "Now with widgets",
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledWith(
+      "/v1/appStoreVersionLocalizations/VL1",
+      expect.objectContaining({
+        data: expect.objectContaining({
+          attributes: { promotionalText: "Now with widgets" },
+        }),
+      }),
+    );
+  });
+
+  it("should report a locale the version does not have", async () => {
+    const { client, provider } = metadataClient();
+    const result = await run(
+      [
+        "metadata",
+        "set",
+        "V1",
+        "--locale",
+        "fr-FR",
+        "--whats-new",
+        "x",
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[not_found] Version 2.4 has no fr-FR metadata",
+    );
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should require a locale, a field and valid URLs", async () => {
+    const { client, provider } = metadataClient();
+    const noField = await run(
+      ["metadata", "set", "V1", "--locale", "en-US"],
+      provider,
+    );
+    expect(noField.exitCode).toBe(1);
+    expect(noField.stderr).toContain("Give at least one field to change");
+    const noLocale = await run(
+      ["metadata", "set", "V1", "--keywords", "a"],
+      provider,
+    );
+    expect(noLocale.exitCode).toBe(1);
+    expect(noLocale.stderr).toContain("--locale");
+    const badUrl = await run(
+      [
+        "metadata",
+        "set",
+        "V1",
+        "--locale",
+        "en-US",
+        "--support-url",
+        "javascript:alert(1)",
+      ],
+      provider,
+    );
+    expect(badUrl.exitCode).toBe(1);
+    expect(badUrl.stderr).toContain("[invalid_input]");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("app-info", () => {
+  it("should print each app info with its categories and locales", async () => {
+    const { client, provider } = metadataClient();
+    const result = await run(["app-info", "123"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/apps/123/appInfos",
+      expect.objectContaining({
+        include: expect.arrayContaining([
+          "primaryCategory",
+          "secondaryCategory",
+        ]),
+      }),
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      appInfos: [
+        {
+          id: "AI1",
+          state: "PREPARE_FOR_SUBMISSION",
+          appStoreAgeRating: "FOUR_PLUS",
+          categories: {
+            primaryCategory: "PRODUCTIVITY",
+            primarySubcategoryOne: null,
+            primarySubcategoryTwo: null,
+            secondaryCategory: null,
+            secondarySubcategoryOne: null,
+            secondarySubcategoryTwo: null,
+          },
+          localizations: [
+            {
+              id: "AL1",
+              locale: "en-US",
+              name: "Example",
+              subtitle: "Old subtitle",
+              privacyPolicyUrl: "https://example.com/privacy",
+              privacyChoicesUrl: null,
+              privacyPolicyText: null,
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("should reject an app ID that is not numeric", async () => {
+    const { client, provider } = metadataClient();
+    const result = await run(["app-info", "abc"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("app-info set", () => {
+  const args = [
+    "app-info",
+    "set",
+    "AI1",
+    "--locale",
+    "en-US",
+    "--subtitle",
+    "New subtitle",
+  ];
+
+  it("should show the current and new values without --yes", async () => {
+    const { client, provider } = metadataClient();
+    const result = await run(args, provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "app-info",
+      appInfo: { id: "AI1", state: "PREPARE_FOR_SUBMISSION" },
+      locale: "en-US",
+      current: { subtitle: "Old subtitle" },
+      update: { subtitle: "New subtitle" },
+      changes: true,
+    });
+  });
+
+  it("should update the locale with --yes", async () => {
+    const { client, provider } = metadataClient();
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledWith("/v1/appInfoLocalizations/AL1", {
+      data: {
+        type: "appInfoLocalizations",
+        id: "AL1",
+        attributes: { subtitle: "New subtitle" },
+      },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "app-info",
+      appInfoId: "AI1",
+      locale: "en-US",
+      changed: ["subtitle"],
+    });
+  });
+
+  it("should refuse an app info that is no longer editable", async () => {
+    const { client, provider } = metadataClient({
+      appInfoState: "READY_FOR_DISTRIBUTION",
+    });
+    const result = await run(args, provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[invalid_input] App info AI1 is READY_FOR_DISTRIBUTION",
+    );
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should report a locale the app info does not have", async () => {
+    const { client, provider } = metadataClient();
+    const result = await run(
+      ["app-info", "set", "AI1", "--locale", "fr-FR", "--name", "x", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[not_found] App info AI1 has no fr-FR localisation",
+    );
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should require a locale, a field, valid URLs and a one-segment id", async () => {
+    const { client, provider } = metadataClient();
+    const noField = await run(
+      ["app-info", "set", "AI1", "--locale", "en-US"],
+      provider,
+    );
+    expect(noField.exitCode).toBe(1);
+    expect(noField.stderr).toContain("Give at least one field to change");
+    const noLocale = await run(
+      ["app-info", "set", "AI1", "--subtitle", "a"],
+      provider,
+    );
+    expect(noLocale.exitCode).toBe(1);
+    expect(noLocale.stderr).toContain("--locale");
+    const badUrl = await run(
+      [
+        "app-info",
+        "set",
+        "AI1",
+        "--locale",
+        "en-US",
+        "--privacy-policy-url",
+        "ftp://x",
+      ],
+      provider,
+    );
+    expect(badUrl.exitCode).toBe(1);
+    expect(badUrl.stderr).toContain("[invalid_input]");
+    const badId = await run(
+      ["app-info", "set", "../apps", "--locale", "en-US", "--name", "x"],
+      provider,
+    );
+    expect(badId.exitCode).toBe(1);
+    expect(badId.stderr).toContain("[invalid_input]");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+const IPHONE = "IPHONE_DYNAMIC_ISLAND_LARGE_PROFILE";
+const IPAD = "IPAD_PRO_3GEN_129_PROFILE";
+
+/** The header of a PNG of this size, which is all `imageSize` reads. */
+function png(width: number, height: number): Uint8Array {
+  const bytes = new Uint8Array(33);
+  const view = new DataView(bytes.buffer);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  view.setUint32(8, 13);
+  bytes.set([0x49, 0x48, 0x44, 0x52], 12);
+  view.setUint32(16, width);
+  view.setUint32(20, height);
+  return bytes;
+}
+
+/** A JPEG with an APP0 segment before its start-of-frame. */
+function jpeg(width: number, height: number): Uint8Array {
+  const bytes = new Uint8Array(2 + 18 + 19);
+  const view = new DataView(bytes.buffer);
+  view.setUint16(0, 0xffd8);
+  view.setUint16(2, 0xffe0);
+  view.setUint16(4, 16);
+  view.setUint16(20, 0xffc0);
+  view.setUint16(22, 17);
+  bytes[24] = 8;
+  view.setUint16(25, height);
+  view.setUint16(27, width);
+  return bytes;
+}
+
+/** A version with en-US (two screenshots and a preview for iPhone) and ja (none). */
+function screenshotsClient({
+  versionState = "PREPARE_FOR_SUBMISSION",
+}: {
+  versionState?: string;
+} = {}) {
+  const onVersion = {
+    appStoreVersionLocalization: {
+      data: { type: "appStoreVersionLocalizations", id: "VL1" },
+    },
+  };
+  const placement = (
+    id: string,
+    placementType: string,
+    asset: { type: string; id: string },
+  ) => ({
+    type: "appAssetLibraryPlacements",
+    id,
+    attributes: {
+      placementType,
+      placementGroup: IPHONE,
+      state: "PARENT_PREPARE_FOR_SUBMISSION",
+    },
+    relationships: {
+      [asset.type === "appAssetLibraryImages" ? "image" : "video"]: {
+        data: asset,
+      },
+      ...onVersion,
+    },
+  });
+  const placements = [
+    placement("P1", "APP_SCREENSHOT", {
+      type: "appAssetLibraryImages",
+      id: "I1",
+    }),
+    placement("P2", "APP_SCREENSHOT", {
+      type: "appAssetLibraryImages",
+      id: "I2",
+    }),
+    placement("P3", "APP_PREVIEW", { type: "appAssetLibraryVideos", id: "V1" }),
+  ];
+  const included = [
+    {
+      type: "appAssetLibraryImages",
+      id: "I1",
+      attributes: { fileName: "1.png", state: "PREPARE_FOR_SUBMISSION" },
+    },
+    {
+      type: "appAssetLibraryImages",
+      id: "I2",
+      attributes: { fileName: "2.png", state: "PREPARE_FOR_SUBMISSION" },
+    },
+    {
+      type: "appAssetLibraryVideos",
+      id: "V1",
+      attributes: { fileName: "preview.mp4", state: "UPLOAD_COMPLETE" },
+    },
+  ];
+  const localizations = [
+    {
+      type: "appStoreVersionLocalizations",
+      id: "VL1",
+      attributes: { locale: "en-US" },
+    },
+    {
+      type: "appStoreVersionLocalizations",
+      id: "VL2",
+      attributes: { locale: "ja" },
+    },
+  ];
+  const get = vi.fn((path: string, query: Record<string, unknown> = {}) => {
+    if (path === "/v1/appStoreVersions/V1") {
+      return Promise.resolve({
+        data: {
+          type: "appStoreVersions",
+          id: "V1",
+          attributes: {
+            versionString: "2.4",
+            platform: "IOS",
+            appVersionState: versionState,
+          },
+          relationships:
+            query.include === "app"
+              ? { app: { data: { type: "apps", id: "123" } } }
+              : undefined,
+        },
+      });
+    }
+    if (path === "/v1/appStoreVersions/V1/appStoreVersionLocalizations") {
+      const locale = query["filter[locale]"];
+      return Promise.resolve({
+        data: localizations.filter(
+          (item) => locale === undefined || item.attributes.locale === locale,
+        ),
+      });
+    }
+    if (path === "/v1/appStoreVersionLocalizations/VL1/placements") {
+      const group = query["filter[placementGroup]"];
+      return Promise.resolve({
+        data: group === undefined || group === IPHONE ? placements : [],
+        included,
+      });
+    }
+    if (path === "/v1/appStoreVersionLocalizations/VL2/placements") {
+      return Promise.resolve({ data: [] });
+    }
+    if (path === "/v1/appAssetLibraryRefData") {
+      return Promise.resolve({
+        data: [
+          {
+            type: "appAssetLibraryRefData",
+            id: "1",
+            attributes: {
+              imageSpecs: [
+                {
+                  specId: "S1",
+                  dimensions: {
+                    minWidth: 1290,
+                    maxWidth: 1290,
+                    minHeight: 2796,
+                    maxHeight: 2796,
+                  },
+                },
+                {
+                  specId: "S2",
+                  dimensions: {
+                    minWidth: 2064,
+                    maxWidth: 2064,
+                    minHeight: 2752,
+                    maxHeight: 2752,
+                  },
+                },
+                {
+                  specId: "S4",
+                  dimensions: {
+                    minWidth: 2048,
+                    maxWidth: 2048,
+                    minHeight: 2732,
+                    maxHeight: 2732,
+                  },
+                },
+              ],
+              placementTypes: [
+                {
+                  placementTypeId: "APP_SCREENSHOT",
+                  specMappings: [
+                    { placementGroupId: IPHONE, specs: ["S1"] },
+                    { placementGroupId: IPAD, specs: ["S2", "S4"] },
+                    { placementGroupId: "IPAD_PRO_129_LEGACY", specs: ["S4"] },
+                  ],
+                },
+                {
+                  placementTypeId: "APP_PREVIEW",
+                  specMappings: [{ placementGroupId: IPHONE, specs: ["S3"] }],
+                },
+              ],
+              features: [
+                {
+                  featureId: "APP_STORE_VERSIONS",
+                  placementPolicies: [
+                    {
+                      placementType: "APP_SCREENSHOT",
+                      groupLimits: [{ groupIds: [IPHONE, IPAD], maxCount: 10 }],
+                    },
+                    {
+                      placementType: "APP_PREVIEW",
+                      groupLimits: [{ groupIds: [IPHONE], maxCount: 3 }],
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      });
+    }
+    if (path === "/v1/apps/123/assetLibrary") {
+      return Promise.resolve({ data: { type: "appAssetLibraries", id: "L1" } });
+    }
+    if (path === "/v1/appAssetLibraryPlacements/P1") {
+      return Promise.resolve({ data: placements[0], included });
+    }
+    // A product page header, and a screenshot on a custom product page.
+    if (path === "/v1/appAssetLibraryPlacements/H1") {
+      return Promise.resolve({
+        data: {
+          ...placements[0],
+          id: "H1",
+          attributes: { placementType: "PRODUCT_PAGE_HEADER_ASSET" },
+        },
+        included,
+      });
+    }
+    if (path === "/v1/appAssetLibraryPlacements/C1") {
+      return Promise.resolve({
+        data: {
+          ...placements[0],
+          id: "C1",
+          relationships: {
+            appCustomProductPageLocalization: {
+              data: { type: "appCustomProductPageLocalizations", id: "CL1" },
+            },
+          },
+        },
+        included,
+      });
+    }
+    if (path === "/v1/appStoreVersionLocalizations/VL1") {
+      return Promise.resolve({
+        data: {
+          ...localizations[0],
+          relationships: {
+            appStoreVersion: { data: { type: "appStoreVersions", id: "V1" } },
+          },
+        },
+      });
+    }
+    return Promise.reject(new Error(`unexpected GET ${path}`));
+  });
+  let assets = 0;
+  const post = vi.fn((path: string, body: unknown) => {
+    if (
+      path === "/v1/appAssetLibraryImages" ||
+      path === "/v1/appAssetLibraryVideos"
+    ) {
+      assets += 1;
+      const size = (body as { data: { attributes: { fileSize: number } } }).data
+        .attributes.fileSize;
+      // Two parts, as Apple sends for a larger file.
+      const half = Math.ceil(size / 2);
+      return Promise.resolve({
+        data: {
+          type: path.slice(4),
+          id: `A${assets}`,
+          attributes: {
+            state: "AWAITING_UPLOAD",
+            uploadOperations: [
+              {
+                method: "PUT",
+                url: "https://upload.example/1",
+                offset: 0,
+                length: half,
+              },
+              {
+                method: "PUT",
+                url: "https://upload.example/2",
+                offset: half,
+                length: size - half,
+              },
+            ],
+          },
+        },
+      });
+    }
+    if (path === "/v1/appAssetLibraryPlacements") {
+      return Promise.resolve({
+        data: { type: "appAssetLibraryPlacements", id: `NP${assets}` },
+      });
+    }
+    if (path === "/v1/appAssetLibraryPlacementOrderingRequests") {
+      return Promise.resolve({ data: { id: "O1" } });
+    }
+    return Promise.reject(new Error(`unexpected POST ${path}`));
+  });
+  const client: AscClient = {
+    get: get as AscClient["get"],
+    post: post as AscClient["post"],
+    patch: vi.fn(() => Promise.resolve({ data: {} })) as AscClient["patch"],
+    delete: vi.fn(() => Promise.resolve()),
+    upload: vi.fn(() => Promise.resolve()),
+  };
+  return { client, provider: vi.fn<AscClientProvider>(() => client) };
+}
+
+describe("screenshots", () => {
+  it("should print each locale's screenshots and previews by group in order", async () => {
+    const { client, provider } = screenshotsClient();
+    const result = await run(["screenshots", "V1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/appStoreVersionLocalizations/VL1/placements",
+      expect.objectContaining({
+        "filter[placementType]": ["APP_SCREENSHOT", "APP_PREVIEW"],
+        sort: "placementGroupPosition",
+        include: ["image", "video"],
+      }),
+    );
+    const output = JSON.parse(result.stdout);
+    expect(output.localizations).toEqual([
+      {
+        id: "VL1",
+        locale: "en-US",
+        groups: [
+          {
+            placementType: "APP_SCREENSHOT",
+            placementGroup: IPHONE,
+            placements: [
+              {
+                id: "P1",
+                state: "PARENT_PREPARE_FOR_SUBMISSION",
+                fileName: "1.png",
+                assetState: "PREPARE_FOR_SUBMISSION",
+              },
+              {
+                id: "P2",
+                state: "PARENT_PREPARE_FOR_SUBMISSION",
+                fileName: "2.png",
+                assetState: "PREPARE_FOR_SUBMISSION",
+              },
+            ],
+          },
+          {
+            placementType: "APP_PREVIEW",
+            placementGroup: IPHONE,
+            placements: [
+              {
+                id: "P3",
+                state: "PARENT_PREPARE_FOR_SUBMISSION",
+                fileName: "preview.mp4",
+                assetState: "UPLOAD_COMPLETE",
+              },
+            ],
+          },
+        ],
+      },
+      { id: "VL2", locale: "ja", groups: [] },
+    ]);
+  });
+
+  it("should report a locale the version does not have", async () => {
+    const { provider } = screenshotsClient();
+    const result = await run(
+      ["screenshots", "V1", "--locale", "fr-FR"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[not_found]");
+  });
+});
+
+describe("screenshots upload", () => {
+  async function folder() {
+    const dir = await mkdtemp(join(tmpdir(), "asc-screenshots-"));
+    await mkdir(join(dir, "en-US"));
+    await mkdir(join(dir, "ja"));
+    await writeFile(join(dir, "en-US", "10-home.png"), png(1290, 2796));
+    await writeFile(join(dir, "en-US", "2-menu.jpg"), jpeg(2064, 2752));
+    await writeFile(join(dir, "en-US", `${IPHONE}-preview.mp4`), "video");
+    await writeFile(join(dir, "en-US", "notes.txt"), "ignored");
+    await writeFile(join(dir, "en-US", ".DS_Store"), "ignored");
+    // Landscape, read in either orientation.
+    await writeFile(join(dir, "ja", "1.png"), png(2796, 1290));
+    return dir;
+  }
+
+  it("should show where each file goes without --yes", async () => {
+    const { client, provider } = screenshotsClient();
+    const dir = await folder();
+    const result = await run(
+      ["screenshots", "upload", "V1", "--dir", dir],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("Dry run");
+    expect(client.post).not.toHaveBeenCalled();
+    expect(client.upload).not.toHaveBeenCalled();
+    const output = JSON.parse(result.stdout);
+    expect(output.files).toEqual([
+      {
+        locale: "en-US",
+        file: "2-menu.jpg",
+        placementType: "APP_SCREENSHOT",
+        placementGroup: IPAD,
+        fileSize: 39,
+      },
+      {
+        locale: "en-US",
+        file: "10-home.png",
+        placementType: "APP_SCREENSHOT",
+        placementGroup: IPHONE,
+        fileSize: 33,
+      },
+      {
+        locale: "en-US",
+        file: `${IPHONE}-preview.mp4`,
+        placementType: "APP_PREVIEW",
+        placementGroup: IPHONE,
+        fileSize: 5,
+      },
+      {
+        locale: "ja",
+        file: "1.png",
+        placementType: "APP_SCREENSHOT",
+        placementGroup: IPHONE,
+        fileSize: 33,
+      },
+    ]);
+    expect(output.skipped).toEqual(["en-US/notes.txt"]);
+  });
+
+  it("should reserve, send the parts, commit and place each file with --yes", async () => {
+    const { client, provider } = screenshotsClient();
+    const dir = await folder();
+    const result = await run(
+      ["screenshots", "upload", "V1", "--dir", dir, "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v1/appAssetLibraryImages", {
+      data: {
+        type: "appAssetLibraryImages",
+        attributes: {
+          fileName: "2-menu.jpg",
+          fileSize: 39,
+          category: "APP_SCREENSHOTS_AND_PREVIEWS",
+        },
+        relationships: {
+          assetLibrary: { data: { type: "appAssetLibraries", id: "L1" } },
+        },
+      },
+    });
+    // Every byte goes up once, in the parts Apple asked for.
+    const parts = vi.mocked(client.upload).mock.calls;
+    expect(parts).toHaveLength(8);
+    expect(parts[0]?.[0].url).toBe("https://upload.example/1");
+    expect(Buffer.concat(parts.slice(0, 2).map(([, part]) => part))).toEqual(
+      Buffer.from(jpeg(2064, 2752)),
+    );
+    expect(client.patch).toHaveBeenCalledWith("/v1/appAssetLibraryVideos/A3", {
+      data: {
+        type: "appAssetLibraryVideos",
+        id: "A3",
+        attributes: { uploaded: true },
+      },
+    });
+    expect(client.post).toHaveBeenCalledWith("/v1/appAssetLibraryPlacements", {
+      data: {
+        type: "appAssetLibraryPlacements",
+        attributes: { placementType: "APP_PREVIEW", placementGroup: IPHONE },
+        relationships: {
+          video: { data: { type: "appAssetLibraryVideos", id: "A3" } },
+          appStoreVersionLocalization: {
+            data: { type: "appStoreVersionLocalizations", id: "VL1" },
+          },
+        },
+      },
+    });
+    const output = JSON.parse(result.stdout);
+    expect(output.dryRun).toBe(false);
+    expect(
+      output.uploaded.map(
+        ({ assetId, placementId }: Record<string, string>) => [
+          assetId,
+          placementId,
+        ],
+      ),
+    ).toEqual([
+      ["A1", "NP1"],
+      ["A2", "NP2"],
+      ["A3", "NP3"],
+      ["A4", "NP4"],
+    ]);
+  });
+
+  it("should refuse a version that is no longer editable", async () => {
+    const { client, provider } = screenshotsClient({
+      versionState: "READY_FOR_DISTRIBUTION",
+    });
+    const result = await run(
+      ["screenshots", "upload", "V1", "--dir", await folder(), "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.post).not.toHaveBeenCalled();
+  });
+
+  it("should stop before writing on a file it cannot place", async () => {
+    const cases: [string, string | Uint8Array, string][] = [
+      ["en-US/odd.png", png(100, 100), "100x100"],
+      ["en-US/preview.mov", "video", "app preview"],
+      ["fr-FR/1.png", png(1290, 2796), "no fr-FR localization"],
+      ["en-US/ipad.png", png(2048, 2732), "fits more than one device group"],
+    ];
+    for (const [file, content, message] of cases) {
+      const { client, provider } = screenshotsClient();
+      const dir = await mkdtemp(join(tmpdir(), "asc-screenshots-"));
+      await mkdir(join(dir, file.split("/")[0] ?? ""));
+      await writeFile(join(dir, file), content);
+      const result = await run(
+        ["screenshots", "upload", "V1", "--dir", dir, "--yes"],
+        provider,
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(message);
+      expect(client.post).not.toHaveBeenCalled();
+    }
+  });
+
+  it("should stop before writing when a group would go past its limit", async () => {
+    const { client, provider } = screenshotsClient();
+    const dir = await mkdtemp(join(tmpdir(), "asc-screenshots-"));
+    await mkdir(join(dir, "en-US"));
+    // en-US already has one iPhone preview, and the limit is three.
+    for (const n of [1, 2, 3]) {
+      await writeFile(join(dir, "en-US", `${IPHONE}-${n}.mp4`), "video");
+    }
+    for (const yes of [[], ["--yes"]]) {
+      const result = await run(
+        ["screenshots", "upload", "V1", "--dir", dir, ...yes],
+        provider,
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("[invalid_input]");
+      expect(result.stderr).toContain(
+        "has 1 APP_PREVIEW and the folder adds 3",
+      );
+      expect(result.stderr).toContain("limit of 3");
+    }
+    expect(client.post).not.toHaveBeenCalled();
+  });
+
+  it("should say which files were placed when a later one fails", async () => {
+    const { client, provider } = screenshotsClient();
+    const post = vi.mocked(client.post);
+    const placeOrFail = post.getMockImplementation();
+    let placements = 0;
+    post.mockImplementation((path, body) => {
+      if (path === "/v1/appAssetLibraryPlacements" && ++placements === 2) {
+        return Promise.reject(
+          new AscApiError(409, {
+            errors: [{ code: "STATE_ERROR", detail: "Not now." }],
+          }),
+        );
+      }
+      return placeOrFail?.(path, body) as never;
+    });
+    const result = await run(
+      ["screenshots", "upload", "V1", "--dir", await folder(), "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("HTTP 409");
+    expect(result.stderr).toContain("Stopped at en-US/10-home.png");
+    expect(result.stderr).toContain("en-US/2-menu.jpg (NP1)");
+  });
+
+  it("should say a refused part is not about the key", async () => {
+    const { client, provider } = screenshotsClient();
+    vi.mocked(client.upload).mockRejectedValue(
+      new UnexpectedResponseError(
+        "Apple's storage refused part of the file with HTTP 403; the upload URL may have expired, so run the upload again.",
+      ),
+    );
+    const result = await run(
+      ["screenshots", "upload", "V1", "--dir", await folder(), "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[unexpected] Apple's storage refused");
+    expect(result.stderr).toContain("Nothing was placed before it.");
+    expect(result.stderr).not.toContain("role");
+  });
+
+  it("should require --dir", async () => {
+    const { client, provider } = screenshotsClient();
+    const result = await run(["screenshots", "upload", "V1"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("--dir");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("screenshots reorder", () => {
+  const args = [
+    "screenshots",
+    "reorder",
+    "V1",
+    "--locale",
+    "en-US",
+    "--group",
+    IPHONE,
+    "--placement",
+    "P2,P1",
+  ];
+
+  it("should show the current and new order without --yes", async () => {
+    const { client, provider } = screenshotsClient();
+    const result = await run(args, provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.post).not.toHaveBeenCalled();
+    const output = JSON.parse(result.stdout);
+    expect(output).toMatchObject({
+      dryRun: true,
+      locale: "en-US",
+      placementGroup: IPHONE,
+      placementType: "APP_SCREENSHOT",
+      current: [
+        { id: "P1", fileName: "1.png" },
+        { id: "P2", fileName: "2.png" },
+      ],
+      order: [
+        { id: "P2", fileName: "2.png" },
+        { id: "P1", fileName: "1.png" },
+      ],
+      changes: true,
+    });
+  });
+
+  it("should send an ordering request with --yes", async () => {
+    const { client, provider } = screenshotsClient();
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith(
+      "/v1/appAssetLibraryPlacementOrderingRequests",
+      {
+        data: {
+          type: "appAssetLibraryPlacementOrderingRequests",
+          attributes: { placementGroup: IPHONE },
+          relationships: {
+            orderedPlacements: {
+              data: [
+                { type: "appAssetLibraryPlacements", id: "P2" },
+                { type: "appAssetLibraryPlacements", id: "P1" },
+              ],
+            },
+            appStoreVersionLocalization: {
+              data: { type: "appStoreVersionLocalizations", id: "VL1" },
+            },
+          },
+        },
+      },
+    );
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      dryRun: false,
+      changed: true,
+    });
+  });
+
+  it("should not write an order that is unchanged", async () => {
+    const { client, provider } = screenshotsClient();
+    const result = await run(
+      [...args.slice(0, -1), "P1", "--placement", "P2", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).not.toHaveBeenCalled();
+  });
+
+  it("should refuse a version that is no longer editable", async () => {
+    const { client, provider } = screenshotsClient({
+      versionState: "READY_FOR_DISTRIBUTION",
+    });
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.post).not.toHaveBeenCalled();
+  });
+
+  it("should require every screenshot of the group and nothing else", async () => {
+    for (const ids of ["P1", "P1,P3", "P1,P9"]) {
+      const { client, provider } = screenshotsClient();
+      const result = await run([...args.slice(0, -1), ids, "--yes"], provider);
+      expect(result.exitCode).toBe(1);
+      expect(client.post).not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe("screenshots delete", () => {
+  it("should show each placement without --yes", async () => {
+    const { client, provider } = screenshotsClient();
+    const result = await run(["screenshots", "delete", "P1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.delete).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "delete",
+      placements: [
+        {
+          id: "P1",
+          placementType: "APP_SCREENSHOT",
+          placementGroup: IPHONE,
+          state: "PARENT_PREPARE_FOR_SUBMISSION",
+          fileName: "1.png",
+          assetState: "PREPARE_FOR_SUBMISSION",
+          versionId: "V1",
+          version: "2.4",
+          locale: "en-US",
+        },
+      ],
+    });
+  });
+
+  it("should refuse what is not a version's screenshot or preview", async () => {
+    for (const [id, message] of [
+      ["H1", "PRODUCT_PAGE_HEADER_ASSET"],
+      ["C1", "not on an App Store version localization"],
+    ]) {
+      const { client, provider } = screenshotsClient();
+      const result = await run(
+        ["screenshots", "delete", id ?? "", "--yes"],
+        provider,
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("[invalid_input]");
+      expect(result.stderr).toContain(message);
+      expect(client.delete).not.toHaveBeenCalled();
+    }
+  });
+
+  it("should refuse a placement on a version that is no longer editable", async () => {
+    const { client, provider } = screenshotsClient({
+      versionState: "READY_FOR_DISTRIBUTION",
+    });
+    const result = await run(
+      ["screenshots", "delete", "P1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.delete).not.toHaveBeenCalled();
+  });
+
+  it("should reject an id that is not one path segment", async () => {
+    const { client, provider } = screenshotsClient();
+    const result = await run(
+      ["screenshots", "delete", "a/b", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+
+  it("should delete the placement with --yes", async () => {
+    const { client, provider } = screenshotsClient();
+    const result = await run(
+      ["screenshots", "delete", "P1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.delete).toHaveBeenCalledWith(
+      "/v1/appAssetLibraryPlacements/P1",
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "delete",
+      deleted: ["P1"],
+    });
+  });
+});
+
+/**
+ * Custom page CP1 of app 123 with version CV1 (en-US CL1, ja CL2), on top of
+ * the screenshots mock for the asset library and ref data.
+ */
+function customPagesClient({
+  versionState = "PREPARE_FOR_SUBMISSION",
+  drafts = [] as { id: string; items: Record<string, unknown>[] }[],
+} = {}) {
+  const base = screenshotsClient();
+  const baseGet = vi.mocked(base.client.get).getMockImplementation();
+  const localizations = [
+    {
+      type: "appCustomProductPageLocalizations",
+      id: "CL1",
+      attributes: { locale: "en-US", promotionalText: "Old text" },
+    },
+    {
+      type: "appCustomProductPageLocalizations",
+      id: "CL2",
+      attributes: { locale: "ja", promotionalText: null },
+    },
+  ];
+  const get = vi.fn((path: string, query: Record<string, unknown> = {}) => {
+    if (path === "/v1/apps/123/appCustomProductPages") {
+      return Promise.resolve({
+        data: [
+          {
+            type: "appCustomProductPages",
+            id: "CP1",
+            attributes: {
+              name: "Summer",
+              url: "https://apps.apple.com/app/id123?ppid=CP1",
+              visible: true,
+            },
+          },
+        ],
+        links: { self: "https://api.appstoreconnect.apple.com/v1/x" },
+        meta: { paging: { total: 1, limit: 50 } },
+      });
+    }
+    if (path === "/v1/appCustomProductPages/CP1") {
+      return Promise.resolve({
+        data: {
+          type: "appCustomProductPages",
+          id: "CP1",
+          attributes: query.include
+            ? undefined
+            : {
+                name: "Summer",
+                url: "https://apps.apple.com/app/id123?ppid=CP1",
+                visible: true,
+              },
+          relationships: query.include
+            ? { app: { data: { type: "apps", id: "123" } } }
+            : undefined,
+        },
+      });
+    }
+    if (path === "/v1/appCustomProductPages/CP1/appCustomProductPageVersions") {
+      return Promise.resolve({
+        data: [
+          {
+            type: "appCustomProductPageVersions",
+            id: "CV1",
+            attributes: {
+              version: "2",
+              state: versionState,
+              deepLink: "myapp://summer",
+            },
+          },
+        ],
+      });
+    }
+    if (path === "/v1/appCustomProductPageVersions/CV1") {
+      return Promise.resolve({
+        data: {
+          type: "appCustomProductPageVersions",
+          id: "CV1",
+          attributes: {
+            version: "2",
+            state: versionState,
+            deepLink: "myapp://summer",
+          },
+          relationships: {
+            appCustomProductPage: {
+              data: { type: "appCustomProductPages", id: "CP1" },
+            },
+          },
+        },
+        included: [
+          {
+            type: "appCustomProductPages",
+            id: "CP1",
+            attributes: { name: "Summer" },
+          },
+        ],
+      });
+    }
+    if (
+      path ===
+      "/v1/appCustomProductPageVersions/CV1/appCustomProductPageLocalizations"
+    ) {
+      const locale = query["filter[locale]"];
+      return Promise.resolve({
+        data: localizations.filter(
+          (item) => locale === undefined || item.attributes.locale === locale,
+        ),
+      });
+    }
+    if (path.startsWith("/v1/appCustomProductPageLocalizations/")) {
+      return Promise.resolve({ data: [] });
+    }
+    if (path === "/v1/reviewSubmissions") {
+      return Promise.resolve({
+        data: drafts.map(({ id }) => ({ type: "reviewSubmissions", id })),
+      });
+    }
+    const draft = drafts.find(
+      ({ id }) => path === `/v1/reviewSubmissions/${id}/items`,
+    );
+    if (draft) return Promise.resolve({ data: draft.items });
+    return baseGet?.(path, query as AscQuery) as never;
+  });
+  const basePost = vi.mocked(base.client.post).getMockImplementation();
+  const post = vi.fn((path: string, body: unknown) => {
+    if (path === "/v1/appCustomProductPages") {
+      return Promise.resolve({
+        data: {
+          type: "appCustomProductPages",
+          id: "CP2",
+          attributes: {
+            name: "Winter",
+            url: "https://apps.apple.com/app/id123?ppid=CP2",
+            visible: true,
+          },
+          relationships: {
+            appCustomProductPageVersions: {
+              data: [{ type: "appCustomProductPageVersions", id: "CV2" }],
+            },
+          },
+        },
+      });
+    }
+    if (path === "/v1/reviewSubmissions") {
+      return Promise.resolve({
+        data: { type: "reviewSubmissions", id: "RS9" },
+      });
+    }
+    if (path === "/v1/reviewSubmissionItems") {
+      return Promise.resolve({
+        data: { type: "reviewSubmissionItems", id: "RI1" },
+      });
+    }
+    return basePost?.(path, body) as never;
+  });
+  const patch = vi.fn((path: string) =>
+    Promise.resolve(
+      path.startsWith("/v1/reviewSubmissions/")
+        ? {
+            data: {
+              type: "reviewSubmissions",
+              id: path.split("/").pop(),
+              attributes: { state: "WAITING_FOR_REVIEW" },
+            },
+          }
+        : { data: {} },
+    ),
+  );
+  const client: AscClient = {
+    ...base.client,
+    get: get as AscClient["get"],
+    post: post as AscClient["post"],
+    patch: patch as AscClient["patch"],
+  };
+  return { client, provider: vi.fn<AscClientProvider>(() => client) };
+}
+
+describe("custom-pages", () => {
+  it("should list an app's pages, filtered by visibility", async () => {
+    const { client, provider } = customPagesClient();
+    const result = await run(["custom-pages", "123", "--no-visible"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/apps/123/appCustomProductPages",
+      expect.objectContaining({ "filter[visible]": "false", limit: 50 }),
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      pages: [
+        {
+          id: "CP1",
+          name: "Summer",
+          url: "https://apps.apple.com/app/id123?ppid=CP1",
+          visible: true,
+        },
+      ],
+      total: 1,
+      hasMore: false,
+    });
+  });
+
+  it("should show a page's versions and each locale's promotional text", async () => {
+    const { provider } = customPagesClient();
+    const result = await run(["custom-pages", "show", "CP1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      page: {
+        id: "CP1",
+        name: "Summer",
+        url: "https://apps.apple.com/app/id123?ppid=CP1",
+        visible: true,
+      },
+      versions: [
+        {
+          id: "CV1",
+          version: "2",
+          state: "PREPARE_FOR_SUBMISSION",
+          deepLink: "myapp://summer",
+          localizations: [
+            { id: "CL1", locale: "en-US", promotionalText: "Old text" },
+            { id: "CL2", locale: "ja", promotionalText: null },
+          ],
+        },
+      ],
+    });
+  });
+});
+
+// Apple's own local id form for resources created in the same request.
+// biome-ignore lint/suspicious/noTemplateCurlyInString: not a template.
+const NEW_VERSION = "${new-appCustomProductPageVersion-id}";
+// biome-ignore lint/suspicious/noTemplateCurlyInString: not a template.
+const NEW_LOCALIZATION = "${new-appCustomProductPageLocalization-id}";
+
+describe("custom-pages create", () => {
+  const args = [
+    "custom-pages",
+    "create",
+    "123",
+    "--name",
+    "Winter",
+    "--locale",
+    "en-US",
+    "--promotional-text",
+    "Snow sale",
+  ];
+
+  it("should show the page and how many the app has without --yes", async () => {
+    const { client, provider } = customPagesClient();
+    const result = await run(args, provider);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("Dry run");
+    expect(client.post).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "create",
+      appId: "123",
+      page: {
+        name: "Winter",
+        locale: "en-US",
+        promotionalText: "Snow sale",
+        deepLink: null,
+      },
+      existingPages: 1,
+    });
+  });
+
+  it("should create the page with its first version and locale with --yes", async () => {
+    const { client, provider } = customPagesClient();
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v1/appCustomProductPages", {
+      data: {
+        type: "appCustomProductPages",
+        attributes: { name: "Winter" },
+        relationships: {
+          app: { data: { type: "apps", id: "123" } },
+          appCustomProductPageVersions: {
+            data: [
+              {
+                type: "appCustomProductPageVersions",
+                id: NEW_VERSION,
+              },
+            ],
+          },
+        },
+      },
+      included: [
+        {
+          type: "appCustomProductPageVersions",
+          id: NEW_VERSION,
+          relationships: {
+            appCustomProductPageLocalizations: {
+              data: [
+                {
+                  type: "appCustomProductPageLocalizations",
+                  id: NEW_LOCALIZATION,
+                },
+              ],
+            },
+          },
+        },
+        {
+          type: "appCustomProductPageLocalizations",
+          id: NEW_LOCALIZATION,
+          attributes: { locale: "en-US", promotionalText: "Snow sale" },
+        },
+      ],
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "create",
+      page: {
+        id: "CP2",
+        name: "Winter",
+        url: "https://apps.apple.com/app/id123?ppid=CP2",
+        visible: true,
+      },
+      versionId: "CV2",
+    });
+  });
+
+  it("should report Apple's page limit as an error", async () => {
+    const { client, provider } = customPagesClient();
+    vi.mocked(client.post).mockRejectedValue(
+      new AscApiError(409, {
+        errors: [
+          {
+            code: "ENTITY_ERROR",
+            detail:
+              "You have reached the maximum number of custom product pages.",
+          },
+        ],
+      }),
+    );
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(result.stderr).toContain(
+      "App 123 may have reached Apple's limit of custom product pages",
+    );
+    expect(result.stderr).toContain("maximum number of custom product pages");
+  });
+
+  it("should require a name and a locale", async () => {
+    const { client, provider } = customPagesClient();
+    const result = await run(["custom-pages", "create", "123"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("--name");
+    expect(result.stderr).toContain("--locale");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("custom-pages set", () => {
+  const args = [
+    "custom-pages",
+    "set",
+    "CV1",
+    "--locale",
+    "en-US",
+    "--promotional-text",
+    "New text",
+    "--deep-link",
+    "myapp://winter",
+  ];
+
+  it("should show the current and new values without --yes", async () => {
+    const { client, provider } = customPagesClient();
+    const result = await run(args, provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "set",
+      version: {
+        id: "CV1",
+        version: "2",
+        state: "PREPARE_FOR_SUBMISSION",
+        deepLink: "myapp://summer",
+        pageId: "CP1",
+        page: "Summer",
+      },
+      locale: "en-US",
+      current: { deepLink: "myapp://summer", promotionalText: "Old text" },
+      update: { deepLink: "myapp://winter", promotionalText: "New text" },
+      changes: true,
+    });
+  });
+
+  it("should update the version's deep link and the locale's text with --yes", async () => {
+    const { client, provider } = customPagesClient();
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledWith(
+      "/v1/appCustomProductPageVersions/CV1",
+      {
+        data: {
+          type: "appCustomProductPageVersions",
+          id: "CV1",
+          attributes: { deepLink: "myapp://winter" },
+        },
+      },
+    );
+    expect(client.patch).toHaveBeenCalledWith(
+      "/v1/appCustomProductPageLocalizations/CL1",
+      {
+        data: {
+          type: "appCustomProductPageLocalizations",
+          id: "CL1",
+          attributes: { promotionalText: "New text" },
+        },
+      },
+    );
+    expect(JSON.parse(result.stdout).changed).toEqual([
+      "deepLink",
+      "promotionalText",
+    ]);
+  });
+
+  it("should refuse a page version in review", async () => {
+    const { client, provider } = customPagesClient({
+      versionState: "WAITING_FOR_REVIEW",
+    });
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[invalid_input] Version 2 of custom product page Summer is WAITING_FOR_REVIEW",
+    );
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should report a locale the page version does not have", async () => {
+    const { client, provider } = customPagesClient();
+    const result = await run(
+      [
+        "custom-pages",
+        "set",
+        "CV1",
+        "--locale",
+        "fr-FR",
+        "--promotional-text",
+        "x",
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[not_found]");
+    expect(result.stderr).toContain("no fr-FR localization");
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should need --locale for promotional text", async () => {
+    const { client, provider } = customPagesClient();
+    const result = await run(
+      ["custom-pages", "set", "CV1", "--promotional-text", "x"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("--locale");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("custom-pages upload", () => {
+  it("should place each file on the page's localization with --yes", async () => {
+    const { client, provider } = customPagesClient();
+    const dir = await mkdtemp(join(tmpdir(), "asc-custom-pages-"));
+    await mkdir(join(dir, "ja"));
+    await writeFile(join(dir, "ja", "1.png"), png(1290, 2796));
+    const dry = await run(
+      ["custom-pages", "upload", "CV1", "--dir", dir],
+      provider,
+    );
+    expect(dry.exitCode).toBe(0);
+    expect(client.post).not.toHaveBeenCalled();
+    expect(JSON.parse(dry.stdout).files).toEqual([
+      {
+        locale: "ja",
+        file: "1.png",
+        placementType: "APP_SCREENSHOT",
+        placementGroup: IPHONE,
+        fileSize: 33,
+      },
+    ]);
+    vi.mocked(console.log).mockClear();
+    const result = await run(
+      ["custom-pages", "upload", "CV1", "--dir", dir, "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/appCustomProductPageLocalizations/CL2/placements",
+      expect.anything(),
+    );
+    expect(client.post).toHaveBeenCalledWith("/v1/appAssetLibraryPlacements", {
+      data: {
+        type: "appAssetLibraryPlacements",
+        attributes: { placementType: "APP_SCREENSHOT", placementGroup: IPHONE },
+        relationships: {
+          image: { data: { type: "appAssetLibraryImages", id: "A1" } },
+          appCustomProductPageLocalization: {
+            data: { type: "appCustomProductPageLocalizations", id: "CL2" },
+          },
+        },
+      },
+    });
+    expect(JSON.parse(result.stdout).uploaded).toEqual([
+      expect.objectContaining({ assetId: "A1", placementId: "NP1" }),
+    ]);
+  });
+
+  it("should refuse a page version that is no longer editable", async () => {
+    const { client, provider } = customPagesClient({
+      versionState: "APPROVED",
+    });
+    const result = await run(
+      ["custom-pages", "upload", "CV1", "--dir", "/nonexistent", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.post).not.toHaveBeenCalled();
+  });
+});
+
+describe("custom-pages submit", () => {
+  it("should only show the version and submission without --yes", async () => {
+    const { client, provider } = customPagesClient();
+    const result = await run(["custom-pages", "submit", "CV1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.post).not.toHaveBeenCalled();
+    expect(client.patch).not.toHaveBeenCalled();
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/reviewSubmissions",
+      expect.objectContaining({
+        "filter[app]": "123",
+        "filter[platform]": "IOS",
+        "filter[state]": "READY_FOR_REVIEW",
+      }),
+    );
+    expect(JSON.parse(result.stdout)).toEqual(
+      expect.objectContaining({
+        dryRun: true,
+        action: "submit",
+        platform: "IOS",
+        reviewSubmissionId: null,
+      }),
+    );
+  });
+
+  it("should create a submission, add the version and submit it with --yes", async () => {
+    const { client, provider } = customPagesClient();
+    const result = await run(
+      ["custom-pages", "submit", "CV1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v1/reviewSubmissions", {
+      data: {
+        type: "reviewSubmissions",
+        attributes: { platform: "IOS" },
+        relationships: { app: { data: { type: "apps", id: "123" } } },
+      },
+    });
+    expect(client.post).toHaveBeenCalledWith("/v1/reviewSubmissionItems", {
+      data: {
+        type: "reviewSubmissionItems",
+        relationships: {
+          reviewSubmission: { data: { type: "reviewSubmissions", id: "RS9" } },
+          appCustomProductPageVersion: {
+            data: { type: "appCustomProductPageVersions", id: "CV1" },
+          },
+        },
+      },
+    });
+    expect(client.patch).toHaveBeenCalledWith("/v1/reviewSubmissions/RS9", {
+      data: {
+        type: "reviewSubmissions",
+        id: "RS9",
+        attributes: { submitted: true },
+      },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "submit",
+      versionId: "CV1",
+      reviewSubmissionId: "RS9",
+      state: "WAITING_FOR_REVIEW",
+    });
+  });
+
+  it("should reuse a draft submission that holds only this version", async () => {
+    const { client, provider } = customPagesClient({
+      versionState: "READY_FOR_REVIEW",
+      drafts: [
+        {
+          id: "RS1",
+          items: [
+            {
+              type: "reviewSubmissionItems",
+              id: "RI1",
+              relationships: {
+                appCustomProductPageVersion: {
+                  data: { type: "appCustomProductPageVersions", id: "CV1" },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const result = await run(
+      ["custom-pages", "submit", "CV1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).not.toHaveBeenCalled();
+    expect(client.patch).toHaveBeenCalledWith(
+      "/v1/reviewSubmissions/RS1",
+      expect.anything(),
+    );
+  });
+
+  it("should refuse a draft submission with other items", async () => {
+    const { client, provider } = customPagesClient({
+      drafts: [
+        {
+          id: "RS1",
+          items: [
+            {
+              type: "reviewSubmissionItems",
+              id: "RI1",
+              relationships: { appCustomProductPageVersion: { data: null } },
+            },
+          ],
+        },
+      ],
+    });
+    const result = await run(["custom-pages", "submit", "CV1"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[invalid_input] The app's IOS review submission RS1 is being prepared with 1 other item(s)",
+    );
+    expect(client.post).not.toHaveBeenCalled();
+  });
+
+  it("should refuse a page version that is already approved", async () => {
+    const { client, provider } = customPagesClient({
+      versionState: "APPROVED",
+    });
+    const result = await run(
+      ["custom-pages", "submit", "CV1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("is APPROVED, so it cannot be submitted");
+    expect(client.post).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Product page test T1 of app 123 with treatment TR1 (en-US TL1, ja TL2), on
+ * top of the screenshots mock for the asset library and ref data.
+ */
+function pageTestsClient({
+  state = "PREPARE_FOR_SUBMISSION",
+  startDate = null as string | null,
+  reviewRequired = true,
+  drafts = [] as { id: string; items: Record<string, unknown>[] }[],
+} = {}) {
+  const base = screenshotsClient();
+  const baseGet = vi.mocked(base.client.get).getMockImplementation();
+  const test = {
+    type: "appStoreVersionExperiments",
+    id: "T1",
+    attributes: {
+      name: "Icon test",
+      platform: "IOS",
+      state,
+      trafficProportion: 30,
+      reviewRequired,
+      startDate,
+      endDate: null,
+    },
+  };
+  const treatment = {
+    type: "appStoreVersionExperimentTreatments",
+    id: "TR1",
+    attributes: {
+      name: "Bold",
+      appIconName: "AppIconBold",
+      promotedDate: null,
+    },
+  };
+  const get = vi.fn((path: string, query: Record<string, unknown> = {}) => {
+    if (path === "/v1/apps/123/appStoreVersionExperimentsV2") {
+      return Promise.resolve({
+        data: [
+          {
+            ...test,
+            relationships: {
+              appStoreVersionExperimentTreatments: {
+                data: [
+                  { type: "appStoreVersionExperimentTreatments", id: "TR1" },
+                ],
+              },
+            },
+          },
+        ],
+        included: [treatment],
+        links: { self: "https://api.appstoreconnect.apple.com/v1/x" },
+        meta: { paging: { total: 1, limit: 50 } },
+      });
+    }
+    if (path === "/v2/appStoreVersionExperiments/T1") {
+      return Promise.resolve({
+        data: {
+          ...test,
+          relationships: { app: { data: { type: "apps", id: "123" } } },
+        },
+      });
+    }
+    if (
+      path ===
+      "/v2/appStoreVersionExperiments/T1/appStoreVersionExperimentTreatments"
+    ) {
+      return Promise.resolve({ data: [treatment] });
+    }
+    if (path === "/v1/appStoreVersionExperimentTreatments/TR1") {
+      return Promise.resolve({
+        data: {
+          ...treatment,
+          relationships: {
+            appStoreVersionExperimentV2: {
+              data: { type: "appStoreVersionExperiments", id: "T1" },
+            },
+          },
+        },
+      });
+    }
+    if (
+      path ===
+      "/v1/appStoreVersionExperimentTreatments/TR1/appStoreVersionExperimentTreatmentLocalizations"
+    ) {
+      return Promise.resolve({
+        data: [
+          {
+            type: "appStoreVersionExperimentTreatmentLocalizations",
+            id: "TL1",
+            attributes: { locale: "en-US" },
+          },
+          {
+            type: "appStoreVersionExperimentTreatmentLocalizations",
+            id: "TL2",
+            attributes: { locale: "ja" },
+          },
+        ],
+      });
+    }
+    if (
+      path.startsWith("/v1/appStoreVersionExperimentTreatmentLocalizations/")
+    ) {
+      return Promise.resolve({ data: [] });
+    }
+    if (path === "/v1/reviewSubmissions") {
+      return Promise.resolve({
+        data: drafts.map(({ id }) => ({ type: "reviewSubmissions", id })),
+      });
+    }
+    const draft = drafts.find(
+      ({ id }) => path === `/v1/reviewSubmissions/${id}/items`,
+    );
+    if (draft) return Promise.resolve({ data: draft.items });
+    return baseGet?.(path, query as AscQuery) as never;
+  });
+  const basePost = vi.mocked(base.client.post).getMockImplementation();
+  let created = 0;
+  const post = vi.fn((path: string, body: unknown) => {
+    if (path === "/v2/appStoreVersionExperiments") {
+      return Promise.resolve({
+        data: {
+          ...test,
+          id: "T2",
+          attributes: { ...test.attributes, name: "New" },
+        },
+      });
+    }
+    if (path === "/v1/appStoreVersionExperimentTreatments") {
+      created += 1;
+      const { data } = body as { data: { attributes: object } };
+      return Promise.resolve({
+        data: {
+          type: "appStoreVersionExperimentTreatments",
+          id: `NT${created}`,
+          attributes: data.attributes,
+        },
+      });
+    }
+    if (path === "/v1/appStoreVersionExperimentTreatmentLocalizations") {
+      created += 1;
+      return Promise.resolve({
+        data: {
+          type: "appStoreVersionExperimentTreatmentLocalizations",
+          id: `NL${created}`,
+        },
+      });
+    }
+    if (path === "/v1/reviewSubmissions") {
+      return Promise.resolve({
+        data: { type: "reviewSubmissions", id: "RS9" },
+      });
+    }
+    if (path === "/v1/reviewSubmissionItems") {
+      return Promise.resolve({
+        data: { type: "reviewSubmissionItems", id: "RI1" },
+      });
+    }
+    return basePost?.(path, body) as never;
+  });
+  const patch = vi.fn((path: string, body: unknown) => {
+    if (path.startsWith("/v1/reviewSubmissions/")) {
+      return Promise.resolve({
+        data: {
+          type: "reviewSubmissions",
+          id: path.split("/").pop(),
+          attributes: { state: "WAITING_FOR_REVIEW" },
+        },
+      });
+    }
+    const { started } = (body as { data: { attributes: { started: boolean } } })
+      .data.attributes;
+    return Promise.resolve({
+      data: {
+        ...test,
+        attributes: {
+          ...test.attributes,
+          state: started ? "APPROVED" : "STOPPED",
+          startDate: "2026-11-20T00:00:00Z",
+        },
+      },
+    });
+  });
+  const client: AscClient = {
+    ...base.client,
+    get: get as AscClient["get"],
+    post: post as AscClient["post"],
+    patch: patch as AscClient["patch"],
+  };
+  return { client, provider: vi.fn<AscClientProvider>(() => client) };
+}
+
+const TEST_T1 = {
+  id: "T1",
+  name: "Icon test",
+  platform: "IOS",
+  state: "PREPARE_FOR_SUBMISSION",
+  trafficProportion: 30,
+  reviewRequired: true,
+  startDate: null,
+  endDate: null,
+};
+
+describe("page-tests", () => {
+  it("should list an app's tests with their treatments, filtered by state", async () => {
+    const { client, provider } = pageTestsClient();
+    const result = await run(
+      ["page-tests", "123", "--state", "APPROVED,COMPLETED"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/apps/123/appStoreVersionExperimentsV2",
+      expect.objectContaining({
+        "filter[state]": ["APPROVED", "COMPLETED"],
+        include: "appStoreVersionExperimentTreatments",
+        limit: 50,
+      }),
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      tests: [
+        {
+          ...TEST_T1,
+          treatments: [
+            {
+              id: "TR1",
+              name: "Bold",
+              appIconName: "AppIconBold",
+              promotedDate: null,
+            },
+          ],
+        },
+      ],
+      total: 1,
+      hasMore: false,
+    });
+  });
+
+  it("should reject an unknown state", async () => {
+    const { client, provider } = pageTestsClient();
+    const result = await run(
+      ["page-tests", "123", "--state", "RUNNING"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+
+  it("should show a test's treatments and their locales", async () => {
+    const { provider } = pageTestsClient();
+    const result = await run(["page-tests", "show", "T1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      test: TEST_T1,
+      treatments: [
+        {
+          id: "TR1",
+          name: "Bold",
+          appIconName: "AppIconBold",
+          promotedDate: null,
+          localizations: [
+            { id: "TL1", locale: "en-US" },
+            { id: "TL2", locale: "ja" },
+          ],
+        },
+      ],
+    });
+  });
+});
+
+describe("page-tests create", () => {
+  const args = [
+    "page-tests",
+    "create",
+    "123",
+    "--name",
+    "New",
+    "--traffic-proportion",
+    "30",
+    "--treatment",
+    "Bold=AppIconBold",
+    "--treatment",
+    "Calm",
+    "--locale",
+    "en-US,ja",
+  ];
+
+  it("should show the test and how many tests are open without --yes", async () => {
+    const { client, provider } = pageTestsClient();
+    const result = await run(args, provider);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("Dry run");
+    expect(client.post).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "create",
+      appId: "123",
+      test: {
+        name: "New",
+        platform: "IOS",
+        trafficProportion: 30,
+        treatments: [
+          { name: "Bold", appIconName: "AppIconBold" },
+          { name: "Calm", appIconName: null },
+        ],
+        locales: ["en-US", "ja"],
+      },
+      openTests: 1,
+    });
+  });
+
+  it("should create the test, its treatments and their locales with --yes", async () => {
+    const { client, provider } = pageTestsClient();
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v2/appStoreVersionExperiments", {
+      data: {
+        type: "appStoreVersionExperiments",
+        attributes: { name: "New", platform: "IOS", trafficProportion: 30 },
+        relationships: { app: { data: { type: "apps", id: "123" } } },
+      },
+    });
+    expect(client.post).toHaveBeenCalledWith(
+      "/v1/appStoreVersionExperimentTreatments",
+      {
+        data: {
+          type: "appStoreVersionExperimentTreatments",
+          attributes: { name: "Bold", appIconName: "AppIconBold" },
+          relationships: {
+            appStoreVersionExperimentV2: {
+              data: { type: "appStoreVersionExperiments", id: "T2" },
+            },
+          },
+        },
+      },
+    );
+    expect(client.post).toHaveBeenCalledWith(
+      "/v1/appStoreVersionExperimentTreatmentLocalizations",
+      {
+        data: {
+          type: "appStoreVersionExperimentTreatmentLocalizations",
+          attributes: { locale: "ja" },
+          relationships: {
+            appStoreVersionExperimentTreatment: {
+              data: { type: "appStoreVersionExperimentTreatments", id: "NT1" },
+            },
+          },
+        },
+      },
+    );
+    const output = JSON.parse(result.stdout);
+    expect(output.test.id).toBe("T2");
+    expect(output.treatments).toEqual([
+      {
+        id: "NT1",
+        name: "Bold",
+        appIconName: "AppIconBold",
+        promotedDate: null,
+        localizations: [
+          { id: "NL2", locale: "en-US" },
+          { id: "NL3", locale: "ja" },
+        ],
+      },
+      {
+        id: "NT4",
+        name: "Calm",
+        appIconName: null,
+        promotedDate: null,
+        localizations: [
+          { id: "NL5", locale: "en-US" },
+          { id: "NL6", locale: "ja" },
+        ],
+      },
+    ]);
+  });
+
+  it("should say what was created when a later step fails", async () => {
+    const { client, provider } = pageTestsClient();
+    const post = vi.mocked(client.post).getMockImplementation();
+    vi.mocked(client.post).mockImplementation((path, body) =>
+      path === "/v1/appStoreVersionExperimentTreatmentLocalizations"
+        ? Promise.reject(
+            new AscApiError(409, { errors: [{ code: "ENTITY_ERROR" }] }),
+          )
+        : (post?.(path, body) as never),
+    );
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("Test T2 was created");
+    expect(result.stderr).toContain("Bold (NT1)");
+  });
+
+  it("should need a name, a traffic proportion and at most three treatments", async () => {
+    const { client, provider } = pageTestsClient();
+    const result = await run(
+      [
+        "page-tests",
+        "create",
+        "123",
+        "--traffic-proportion",
+        "150",
+        ...["A", "B", "C", "D"].flatMap((name) => ["--treatment", name]),
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("--name");
+    expect(result.stderr).toContain("at most 3 treatments");
+    expect(result.stderr).toContain("trafficProportion");
+    expect(result.stderr).toContain("at least one --locale");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("page-tests upload", () => {
+  it("should place each file on the treatment's localization with --yes", async () => {
+    const { client, provider } = pageTestsClient();
+    const dir = await mkdtemp(join(tmpdir(), "asc-page-tests-"));
+    await mkdir(join(dir, "ja"));
+    await writeFile(join(dir, "ja", "1.png"), png(1290, 2796));
+    const dry = await run(
+      ["page-tests", "upload", "TR1", "--dir", dir],
+      provider,
+    );
+    expect(dry.exitCode).toBe(0);
+    expect(client.post).not.toHaveBeenCalled();
+    expect(JSON.parse(dry.stdout).files).toEqual([
+      {
+        locale: "ja",
+        file: "1.png",
+        placementType: "APP_SCREENSHOT",
+        placementGroup: IPHONE,
+        fileSize: 33,
+      },
+    ]);
+    vi.mocked(console.log).mockClear();
+    const result = await run(
+      ["page-tests", "upload", "TR1", "--dir", dir, "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/appStoreVersionExperimentTreatmentLocalizations/TL2/placements",
+      expect.anything(),
+    );
+    expect(client.post).toHaveBeenCalledWith("/v1/appAssetLibraryPlacements", {
+      data: {
+        type: "appAssetLibraryPlacements",
+        attributes: { placementType: "APP_SCREENSHOT", placementGroup: IPHONE },
+        relationships: {
+          image: { data: { type: "appAssetLibraryImages", id: "A1" } },
+          appStoreVersionExperimentTreatmentLocalization: {
+            data: {
+              type: "appStoreVersionExperimentTreatmentLocalizations",
+              id: "TL2",
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("should refuse a test in review", async () => {
+    const { client, provider } = pageTestsClient({ state: "IN_REVIEW" });
+    const result = await run(
+      ["page-tests", "upload", "TR1", "--dir", "/nonexistent", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[invalid_input] Product page test Icon test is IN_REVIEW",
+    );
+    expect(client.post).not.toHaveBeenCalled();
+  });
+});
+
+describe("page-tests submit", () => {
+  it("should only show the test and submission without --yes", async () => {
+    const { client, provider } = pageTestsClient();
+    const result = await run(["page-tests", "submit", "T1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.post).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "submit",
+      test: TEST_T1,
+      reviewSubmissionId: null,
+    });
+  });
+
+  it("should add the test to a new submission and submit it with --yes", async () => {
+    const { client, provider } = pageTestsClient();
+    const result = await run(["page-tests", "submit", "T1", "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v1/reviewSubmissionItems", {
+      data: {
+        type: "reviewSubmissionItems",
+        relationships: {
+          reviewSubmission: { data: { type: "reviewSubmissions", id: "RS9" } },
+          appStoreVersionExperimentV2: {
+            data: { type: "appStoreVersionExperiments", id: "T1" },
+          },
+        },
+      },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "submit",
+      testId: "T1",
+      reviewSubmissionId: "RS9",
+      state: "WAITING_FOR_REVIEW",
+    });
+  });
+
+  it("should refuse a draft submission with other items", async () => {
+    const { client, provider } = pageTestsClient({
+      drafts: [
+        {
+          id: "RS1",
+          items: [
+            {
+              type: "reviewSubmissionItems",
+              id: "RI1",
+              relationships: { appStoreVersionExperimentV2: { data: null } },
+            },
+          ],
+        },
+      ],
+    });
+    const result = await run(["page-tests", "submit", "T1", "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("1 other item(s)");
+    expect(client.post).not.toHaveBeenCalled();
+  });
+});
+
+describe("page-tests start and stop", () => {
+  it("should start an approved test with --yes", async () => {
+    const { client, provider } = pageTestsClient({ state: "APPROVED" });
+    const dry = await run(["page-tests", "start", "T1"], provider);
+    expect(dry.exitCode).toBe(0);
+    expect(client.patch).not.toHaveBeenCalled();
+    vi.mocked(console.log).mockClear();
+    const result = await run(["page-tests", "start", "T1", "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledWith(
+      "/v2/appStoreVersionExperiments/T1",
+      {
+        data: {
+          type: "appStoreVersionExperiments",
+          id: "T1",
+          attributes: { started: true },
+        },
+      },
+    );
+    expect(JSON.parse(result.stdout).test.startDate).toBe(
+      "2026-11-20T00:00:00Z",
+    );
+  });
+
+  it("should refuse to start a test that still needs review", async () => {
+    const { client, provider } = pageTestsClient();
+    const result = await run(["page-tests", "start", "T1", "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "is PREPARE_FOR_SUBMISSION, so it cannot start",
+    );
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should start a test that needs no review", async () => {
+    const { provider } = pageTestsClient({ reviewRequired: false });
+    const result = await run(["page-tests", "start", "T1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout).dryRun).toBe(true);
+  });
+
+  it("should refuse to start a test that already started", async () => {
+    const { client, provider } = pageTestsClient({
+      state: "APPROVED",
+      startDate: "2026-11-20T00:00:00Z",
+    });
+    const result = await run(["page-tests", "start", "T1", "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("already started on 2026-11-20T00:00:00Z");
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should show a running test without stopping it when --yes is missing", async () => {
+    const { client, provider } = pageTestsClient({
+      state: "APPROVED",
+      startDate: "2026-11-20T00:00:00Z",
+    });
+    const result = await run(["page-tests", "stop", "T1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout).dryRun).toBe(true);
+    expect(result.stderr).toContain("Dry run");
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should stop a running test with --yes", async () => {
+    const { client, provider } = pageTestsClient({
+      state: "APPROVED",
+      startDate: "2026-11-20T00:00:00Z",
+    });
+    const result = await run(["page-tests", "stop", "T1", "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledWith(
+      "/v2/appStoreVersionExperiments/T1",
+      {
+        data: {
+          type: "appStoreVersionExperiments",
+          id: "T1",
+          attributes: { started: false },
+        },
+      },
+    );
+    expect(JSON.parse(result.stdout).test.state).toBe("STOPPED");
+  });
+
+  it("should refuse to stop a test that already ended", async () => {
+    const { client, provider } = pageTestsClient({
+      state: "STOPPED",
+      startDate: "2026-11-20T00:00:00Z",
+    });
+    const result = await run(["page-tests", "stop", "T1", "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("is already STOPPED");
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should refuse to stop a test that has not started", async () => {
+    const { client, provider } = pageTestsClient({ state: "APPROVED" });
+    const result = await run(["page-tests", "stop", "T1", "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("has not started");
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+});
+
+const EVENT_CARD = "EVENT_CARD_PROFILE";
+
+/**
+ * In-app event E1 of app 123 with en-US localization EL1, on top of the
+ * screenshots mock for the asset library, with ref data for event placements.
+ */
+function eventsClient({
+  state = "DRAFT",
+  cardPlaced = false,
+  drafts = [] as { id: string; items: Record<string, unknown>[] }[],
+} = {}) {
+  const base = screenshotsClient();
+  const baseGet = vi.mocked(base.client.get).getMockImplementation();
+  const event = {
+    type: "appEvents",
+    id: "E1",
+    attributes: {
+      referenceName: "Winter challenge",
+      badge: "CHALLENGE",
+      eventState: state,
+      priority: "NORMAL",
+      purpose: "KEEP_ACTIVE_USERS_INFORMED",
+      purchaseRequirement: "NO_COST_ASSOCIATED",
+      primaryLocale: "en-US",
+      deepLink: null,
+      territorySchedules: [
+        {
+          territories: ["USA", "GBR"],
+          publishStart: "2026-12-01T00:00:00Z",
+          eventStart: "2026-12-05T00:00:00Z",
+          eventEnd: "2026-12-20T00:00:00Z",
+        },
+      ],
+    },
+  };
+  const localization = {
+    type: "appEventLocalizations",
+    id: "EL1",
+    attributes: {
+      locale: "en-US",
+      name: "Winter challenge",
+      shortDescription: "Beat the cold",
+      longDescription: null,
+    },
+  };
+  const get = vi.fn((path: string, query: Record<string, unknown> = {}) => {
+    if (path === "/v1/apps/123/appEvents") {
+      const id = query["filter[id]"];
+      return Promise.resolve({
+        data: id === undefined || id === "E1" ? [event] : [],
+        links: { self: "https://api.appstoreconnect.apple.com/v1/x" },
+        meta: { paging: { total: 4, limit: 50 } },
+      });
+    }
+    if (path === "/v1/appEvents/E1") {
+      return Promise.resolve({ data: event });
+    }
+    if (path === "/v1/appEvents/E1/localizations") {
+      return Promise.resolve({ data: [localization] });
+    }
+    if (path === "/v1/appEvents/E2/localizations") {
+      return Promise.resolve({ data: [] });
+    }
+    if (path === "/v1/appEventLocalizations/EL1/placements") {
+      return Promise.resolve({
+        data: cardPlaced
+          ? [
+              {
+                type: "appAssetLibraryPlacements",
+                id: "EP1",
+                attributes: {
+                  placementType: "EVENT_CARD_ASSET",
+                  placementGroup: EVENT_CARD,
+                  state: "PARENT_PREPARE_FOR_SUBMISSION",
+                },
+                relationships: {
+                  image: { data: { type: "appAssetLibraryImages", id: "I9" } },
+                },
+              },
+            ]
+          : [],
+        included: [
+          {
+            type: "appAssetLibraryImages",
+            id: "I9",
+            attributes: {
+              fileName: "card.png",
+              state: "PREPARE_FOR_SUBMISSION",
+            },
+          },
+        ],
+      });
+    }
+    if (path === "/v1/appAssetLibraryRefData") {
+      return Promise.resolve({
+        data: [
+          {
+            type: "appAssetLibraryRefData",
+            id: "1",
+            attributes: {
+              imageSpecs: [],
+              placementTypes: [
+                {
+                  placementTypeId: "EVENT_CARD_ASSET",
+                  specMappings: [{ placementGroupId: EVENT_CARD, specs: [] }],
+                },
+                {
+                  placementTypeId: "EVENT_DETAILS_PAGE_ASSET",
+                  specMappings: [
+                    { placementGroupId: "EVENT_DETAILS_IPHONE", specs: [] },
+                    { placementGroupId: "EVENT_DETAILS_IPAD", specs: [] },
+                  ],
+                },
+              ],
+              features: [
+                {
+                  featureId: "IN_APP_EVENTS",
+                  placementPolicies: [
+                    {
+                      placementType: "EVENT_CARD_ASSET",
+                      groupLimits: [{ groupIds: [EVENT_CARD], maxCount: 1 }],
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      });
+    }
+    if (path === "/v1/reviewSubmissions") {
+      return Promise.resolve({
+        data: drafts.map(({ id }) => ({ type: "reviewSubmissions", id })),
+      });
+    }
+    const draft = drafts.find(
+      ({ id }) => path === `/v1/reviewSubmissions/${id}/items`,
+    );
+    if (draft) return Promise.resolve({ data: draft.items });
+    return baseGet?.(path, query as AscQuery) as never;
+  });
+  const basePost = vi.mocked(base.client.post).getMockImplementation();
+  const post = vi.fn((path: string, body: unknown) => {
+    if (path === "/v1/appEvents") {
+      const { data } = body as { data: { attributes: object } };
+      return Promise.resolve({
+        data: {
+          type: "appEvents",
+          id: "E2",
+          attributes: { ...data.attributes, eventState: "DRAFT" },
+        },
+      });
+    }
+    if (path === "/v1/appEventLocalizations") {
+      const { data } = body as { data: { attributes: object } };
+      return Promise.resolve({
+        data: {
+          type: "appEventLocalizations",
+          id: "EL9",
+          attributes: data.attributes,
+        },
+      });
+    }
+    if (path === "/v1/reviewSubmissions") {
+      return Promise.resolve({
+        data: { type: "reviewSubmissions", id: "RS9" },
+      });
+    }
+    if (path === "/v1/reviewSubmissionItems") {
+      return Promise.resolve({
+        data: { type: "reviewSubmissionItems", id: "RI1" },
+      });
+    }
+    return basePost?.(path, body) as never;
+  });
+  const patch = vi.fn((path: string, body: unknown) => {
+    if (path.startsWith("/v1/reviewSubmissions/")) {
+      return Promise.resolve({
+        data: {
+          type: "reviewSubmissions",
+          id: path.split("/").pop(),
+          attributes: { state: "WAITING_FOR_REVIEW" },
+        },
+      });
+    }
+    if (path === "/v1/appEventLocalizations/EL1") {
+      const { data } = body as { data: { attributes: object } };
+      return Promise.resolve({
+        data: {
+          ...localization,
+          attributes: { ...localization.attributes, ...data.attributes },
+        },
+      });
+    }
+    return Promise.resolve({ data: {} });
+  });
+  const client: AscClient = {
+    ...base.client,
+    get: get as AscClient["get"],
+    post: post as AscClient["post"],
+    patch: patch as AscClient["patch"],
+  };
+  return { client, provider: vi.fn<AscClientProvider>(() => client) };
+}
+
+const EVENT_E1 = {
+  id: "E1",
+  referenceName: "Winter challenge",
+  badge: "CHALLENGE",
+  state: "DRAFT",
+  priority: "NORMAL",
+  purpose: "KEEP_ACTIVE_USERS_INFORMED",
+  purchaseRequirement: "NO_COST_ASSOCIATED",
+  primaryLocale: "en-US",
+  deepLink: null,
+  territorySchedules: [
+    {
+      territories: ["USA", "GBR"],
+      publishStart: "2026-12-01T00:00:00Z",
+      eventStart: "2026-12-05T00:00:00Z",
+      eventEnd: "2026-12-20T00:00:00Z",
+    },
+  ],
+};
+
+describe("events", () => {
+  it("should list an app's events with their schedules, filtered by state", async () => {
+    const { client, provider } = eventsClient();
+    const result = await run(
+      ["events", "123", "--state", "DRAFT,PUBLISHED"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/apps/123/appEvents",
+      expect.objectContaining({
+        "filter[eventState]": ["DRAFT", "PUBLISHED"],
+        limit: 50,
+      }),
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      events: [EVENT_E1],
+      total: 4,
+      hasMore: false,
+    });
+  });
+
+  it("should reject an unknown state", async () => {
+    const { client, provider } = eventsClient();
+    const result = await run(["events", "123", "--state", "LIVE"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+
+  it("should show an event's localizations and their event images", async () => {
+    const { client, provider } = eventsClient({ cardPlaced: true });
+    const result = await run(["events", "show", "E1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/appEventLocalizations/EL1/placements",
+      expect.objectContaining({
+        "filter[placementType]": [
+          "EVENT_CARD_ASSET",
+          "EVENT_DETAILS_PAGE_ASSET",
+        ],
+      }),
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      event: EVENT_E1,
+      localizations: [
+        {
+          id: "EL1",
+          locale: "en-US",
+          name: "Winter challenge",
+          shortDescription: "Beat the cold",
+          longDescription: null,
+          placements: [
+            {
+              id: "EP1",
+              placementType: "EVENT_CARD_ASSET",
+              placementGroup: EVENT_CARD,
+              state: "PARENT_PREPARE_FOR_SUBMISSION",
+              fileName: "card.png",
+              assetState: "PREPARE_FOR_SUBMISSION",
+            },
+          ],
+        },
+      ],
+    });
+  });
+});
+
+describe("events create", () => {
+  const args = [
+    "events",
+    "create",
+    "123",
+    "--reference-name",
+    "Spring sprint",
+    "--locale",
+    "en-US",
+    "--name",
+    "Spring sprint",
+    "--short-description",
+    "Run every day",
+    "--badge",
+    "CHALLENGE",
+    "--territories",
+    "USA,GBR",
+    "--event-start",
+    "2027-03-01T00:00:00Z",
+    "--event-end",
+    "2027-03-31T00:00:00Z",
+  ];
+
+  it("should show the event and how many the app has without --yes", async () => {
+    const { client, provider } = eventsClient();
+    const result = await run(args, provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.post).not.toHaveBeenCalled();
+    expect(result.stderr).toContain("Dry run");
+    const output = JSON.parse(result.stdout);
+    expect(output).toMatchObject({
+      dryRun: true,
+      action: "create",
+      appId: "123",
+      event: {
+        referenceName: "Spring sprint",
+        primaryLocale: "en-US",
+        badge: "CHALLENGE",
+        territorySchedules: [
+          {
+            territories: ["USA", "GBR"],
+            eventStart: "2027-03-01T00:00:00Z",
+            eventEnd: "2027-03-31T00:00:00Z",
+          },
+        ],
+      },
+      localization: {
+        locale: "en-US",
+        name: "Spring sprint",
+        shortDescription: "Run every day",
+      },
+      existingEvents: 4,
+    });
+  });
+
+  it("should create the event and its primary locale with --yes", async () => {
+    const { client, provider } = eventsClient();
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v1/appEvents", {
+      data: {
+        type: "appEvents",
+        attributes: {
+          referenceName: "Spring sprint",
+          primaryLocale: "en-US",
+          badge: "CHALLENGE",
+          territorySchedules: [
+            {
+              territories: ["USA", "GBR"],
+              eventStart: "2027-03-01T00:00:00Z",
+              eventEnd: "2027-03-31T00:00:00Z",
+            },
+          ],
+        },
+        relationships: { app: { data: { type: "apps", id: "123" } } },
+      },
+    });
+    expect(client.post).toHaveBeenCalledWith("/v1/appEventLocalizations", {
+      data: {
+        type: "appEventLocalizations",
+        attributes: {
+          locale: "en-US",
+          name: "Spring sprint",
+          shortDescription: "Run every day",
+        },
+        relationships: {
+          appEvent: { data: { type: "appEvents", id: "E2" } },
+        },
+      },
+    });
+    const output = JSON.parse(result.stdout);
+    expect(output.event).toMatchObject({ id: "E2", state: "DRAFT" });
+    expect(output.localization).toMatchObject({ id: "EL9", locale: "en-US" });
+  });
+
+  it("should say the event was created when its locale fails", async () => {
+    const { client, provider } = eventsClient();
+    const post = vi.mocked(client.post);
+    const create = post.getMockImplementation();
+    post.mockImplementation((path, body) =>
+      path === "/v1/appEventLocalizations"
+        ? Promise.reject(new AscApiError(409, {}))
+        : (create?.(path, body) as never),
+    );
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "In-app event E2 was created but its en-US name and descriptions were not saved",
+    );
+  });
+
+  it("should need a reference name, a locale, and valid territories and dates", async () => {
+    const { client, provider } = eventsClient();
+    for (const extra of [
+      ["--locale", "en-US"],
+      ["--reference-name", "X"],
+      ["--reference-name", "X", "--locale", "en-US", "--territories", "us"],
+      ["--reference-name", "X", "--locale", "en-US", "--event-start", "soon"],
+    ]) {
+      const result = await run(["events", "create", "123", ...extra], provider);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("[invalid_input]");
+    }
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("events set", () => {
+  it("should show the current and new values without --yes", async () => {
+    const { client, provider } = eventsClient();
+    const result = await run(
+      [
+        "events",
+        "set",
+        "E1",
+        "--locale",
+        "en-US",
+        "--long-description",
+        "Long",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "set",
+      event: EVENT_E1,
+      locale: "en-US",
+      newLocale: false,
+      current: { longDescription: null },
+      update: { longDescription: "Long" },
+      changes: true,
+    });
+  });
+
+  it("should update only the changed fields with --yes", async () => {
+    const { client, provider } = eventsClient();
+    const result = await run(
+      [
+        "events",
+        "set",
+        "E1",
+        "--locale",
+        "en-US",
+        "--name",
+        "Winter challenge",
+        "--long-description",
+        "Long",
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledWith("/v1/appEventLocalizations/EL1", {
+      data: {
+        type: "appEventLocalizations",
+        id: "EL1",
+        attributes: { longDescription: "Long" },
+      },
+    });
+    expect(JSON.parse(result.stdout).changed).toEqual(["longDescription"]);
+  });
+
+  it("should add a locale the event does not have with --yes", async () => {
+    const { client, provider } = eventsClient();
+    const result = await run(
+      ["events", "set", "E1", "--locale", "ja", "--name", "冬", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v1/appEventLocalizations", {
+      data: {
+        type: "appEventLocalizations",
+        attributes: { locale: "ja", name: "冬" },
+        relationships: {
+          appEvent: { data: { type: "appEvents", id: "E1" } },
+        },
+      },
+    });
+  });
+
+  it("should refuse an event in review", async () => {
+    const { client, provider } = eventsClient({ state: "IN_REVIEW" });
+    const result = await run(
+      ["events", "set", "E1", "--locale", "en-US", "--name", "X", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[invalid_input] In-app event Winter challenge is IN_REVIEW",
+    );
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should need a field to change", async () => {
+    const { provider } = eventsClient();
+    const result = await run(
+      ["events", "set", "E1", "--locale", "en-US"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("Give --name");
+  });
+});
+
+describe("events upload", () => {
+  async function folder(files: string[]) {
+    const dir = await mkdtemp(join(tmpdir(), "asc-events-"));
+    await mkdir(join(dir, "en-US"));
+    for (const file of files) {
+      await writeFile(
+        join(dir, "en-US", file),
+        file.endsWith(".png") ? png(1920, 1080) : "video",
+      );
+    }
+    return dir;
+  }
+
+  it("should place each file by the type and group in its name with --yes", async () => {
+    const { client, provider } = eventsClient();
+    const dir = await folder([
+      "EVENT_CARD_ASSET.png",
+      "EVENT_DETAILS_PAGE_ASSET-EVENT_DETAILS_IPHONE.mp4",
+    ]);
+    const dry = await run(
+      ["events", "upload", "123", "E1", "--dir", dir],
+      provider,
+    );
+    expect(dry.exitCode).toBe(0);
+    expect(client.post).not.toHaveBeenCalled();
+    expect(JSON.parse(dry.stdout).files).toEqual([
+      {
+        locale: "en-US",
+        file: "EVENT_CARD_ASSET.png",
+        placementType: "EVENT_CARD_ASSET",
+        placementGroup: EVENT_CARD,
+        fileSize: 33,
+      },
+      {
+        locale: "en-US",
+        file: "EVENT_DETAILS_PAGE_ASSET-EVENT_DETAILS_IPHONE.mp4",
+        placementType: "EVENT_DETAILS_PAGE_ASSET",
+        placementGroup: "EVENT_DETAILS_IPHONE",
+        fileSize: 5,
+      },
+    ]);
+    vi.mocked(console.log).mockClear();
+    const result = await run(
+      ["events", "upload", "123", "E1", "--dir", dir, "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v1/appAssetLibraryImages", {
+      data: {
+        type: "appAssetLibraryImages",
+        attributes: {
+          fileName: "EVENT_CARD_ASSET.png",
+          fileSize: 33,
+          category: "CREATIVE_ASSETS",
+        },
+        relationships: {
+          assetLibrary: { data: { type: "appAssetLibraries", id: "L1" } },
+        },
+      },
+    });
+    expect(client.post).toHaveBeenCalledWith("/v1/appAssetLibraryPlacements", {
+      data: {
+        type: "appAssetLibraryPlacements",
+        attributes: {
+          placementType: "EVENT_DETAILS_PAGE_ASSET",
+          placementGroup: "EVENT_DETAILS_IPHONE",
+        },
+        relationships: {
+          video: { data: { type: "appAssetLibraryVideos", id: "A2" } },
+          appEventLocalization: {
+            data: { type: "appEventLocalizations", id: "EL1" },
+          },
+        },
+      },
+    });
+  });
+
+  it("should place a file without a group when Apple lists none for its type", async () => {
+    const { client, provider } = eventsClient();
+    const eventsGet = vi.mocked(client.get).getMockImplementation();
+    vi.mocked(client.get).mockImplementation((path, query) =>
+      path === "/v1/appAssetLibraryRefData"
+        ? (Promise.resolve({
+            data: [
+              {
+                type: "appAssetLibraryRefData",
+                id: "1",
+                attributes: {
+                  imageSpecs: [],
+                  placementTypes: [
+                    { placementTypeId: "EVENT_CARD_ASSET", specMappings: [] },
+                  ],
+                },
+              },
+            ],
+          }) as never)
+        : (eventsGet?.(path, query) as never),
+    );
+    const result = await run(
+      [
+        "events",
+        "upload",
+        "123",
+        "E1",
+        "--dir",
+        await folder(["EVENT_CARD_ASSET.png", "EVENT_CARD_ASSET.mp4"]),
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v1/appAssetLibraryPlacements", {
+      data: {
+        type: "appAssetLibraryPlacements",
+        attributes: { placementType: "EVENT_CARD_ASSET" },
+        relationships: {
+          image: { data: { type: "appAssetLibraryImages", id: "A2" } },
+          appEventLocalization: {
+            data: { type: "appEventLocalizations", id: "EL1" },
+          },
+        },
+      },
+    });
+  });
+
+  it("should stop before writing on a file it cannot place", async () => {
+    const cases: [string, string][] = [
+      ["card.png", "EVENT_CARD_ASSET or EVENT_DETAILS_PAGE_ASSET"],
+      [
+        "EVENT_DETAILS_PAGE_ASSET.mp4",
+        "EVENT_DETAILS_IPHONE, EVENT_DETAILS_IPAD",
+      ],
+    ];
+    for (const [file, message] of cases) {
+      const { client, provider } = eventsClient();
+      const result = await run(
+        [
+          "events",
+          "upload",
+          "123",
+          "E1",
+          "--dir",
+          await folder([file]),
+          "--yes",
+        ],
+        provider,
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(message);
+      expect(client.post).not.toHaveBeenCalled();
+    }
+  });
+
+  it("should stop when the event already has its one card", async () => {
+    const { client, provider } = eventsClient({ cardPlaced: true });
+    const result = await run(
+      [
+        "events",
+        "upload",
+        "123",
+        "E1",
+        "--dir",
+        await folder(["EVENT_CARD_ASSET.png"]),
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("limit of 1");
+    expect(client.post).not.toHaveBeenCalled();
+  });
+
+  it("should report an event that is not the app's", async () => {
+    const { client, provider } = eventsClient();
+    const result = await run(
+      ["events", "upload", "123", "E7", "--dir", "/nonexistent", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[not_found] App 123 has no in-app event E7",
+    );
+    expect(client.post).not.toHaveBeenCalled();
+  });
+});
+
+describe("events submit", () => {
+  it("should show the event, submission and events past review without --yes", async () => {
+    const { client, provider } = eventsClient();
+    const result = await run(["events", "submit", "123", "E1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.post).not.toHaveBeenCalled();
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/apps/123/appEvents",
+      expect.objectContaining({
+        "filter[eventState]": ["ACCEPTED", "APPROVED", "PUBLISHED"],
+      }),
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "submit",
+      event: EVENT_E1,
+      platform: "IOS",
+      reviewSubmissionId: null,
+      eventsPastReview: 4,
+    });
+  });
+
+  it("should add the event to a new submission and submit it with --yes", async () => {
+    const { client, provider } = eventsClient();
+    const result = await run(
+      ["events", "submit", "123", "E1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v1/reviewSubmissionItems", {
+      data: {
+        type: "reviewSubmissionItems",
+        relationships: {
+          reviewSubmission: { data: { type: "reviewSubmissions", id: "RS9" } },
+          appEvent: { data: { type: "appEvents", id: "E1" } },
+        },
+      },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "submit",
+      eventId: "E1",
+      reviewSubmissionId: "RS9",
+      state: "WAITING_FOR_REVIEW",
+    });
+  });
+
+  it("should explain a refused submission, such as Apple's limit on events", async () => {
+    const { client, provider } = eventsClient();
+    vi.mocked(client.patch).mockRejectedValue(
+      new AscApiError(409, {
+        errors: [{ code: "STATE_ERROR", detail: "Too many events." }],
+      }),
+    );
+    const result = await run(
+      ["events", "submit", "123", "E1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(result.stderr).toContain("Apple's limit of events at once");
+    expect(result.stderr).toContain("Too many events.");
+  });
+
+  it("should refuse an event that is already published", async () => {
+    const { client, provider } = eventsClient({ state: "PUBLISHED" });
+    const result = await run(
+      ["events", "submit", "123", "E1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("is PUBLISHED, so it cannot be submitted");
+    expect(client.post).not.toHaveBeenCalled();
+  });
+});
+
+/** A client answering the pricing, availability and age rating reads. */
+function storeClient({
+  appInfoState = "PREPARE_FOR_SUBMISSION",
+  failPatchAt = -1,
+}: {
+  appInfoState?: string;
+  failPatchAt?: number;
+} = {}) {
+  const price = (
+    id: string,
+    territory: string,
+    startDate: string | null,
+    endDate: string | null,
+  ) => ({
+    type: "appPrices",
+    id,
+    attributes: { manual: true, startDate, endDate },
+    relationships: {
+      appPricePoint: { data: { type: "appPricePoints", id: `P-${id}` } },
+      territory: { data: { type: "territories", id: territory } },
+    },
+  });
+  const point = (id: string, customerPrice: string, proceeds: string) => ({
+    type: "appPricePoints",
+    id: `P-${id}`,
+    attributes: { customerPrice, proceeds },
+  });
+  const territory = (id: string, currency: string) => ({
+    type: "territories",
+    id,
+    attributes: { currency },
+  });
+  const availability = (id: string, code: string, available: boolean) => ({
+    type: "territoryAvailabilities",
+    id,
+    attributes: {
+      available,
+      releaseDate: null,
+      preOrderEnabled: false,
+      preOrderPublishDate: null,
+      contentStatuses: available ? ["AVAILABLE"] : ["CANNOT_SELL"],
+    },
+    relationships: { territory: { data: { type: "territories", id: code } } },
+  });
+  const get = vi.fn((path: string, query: Record<string, unknown> = {}) => {
+    switch (path) {
+      case "/v1/apps/123/appPriceSchedule":
+        return Promise.resolve({
+          data: {
+            type: "appPriceSchedules",
+            id: "S1",
+            relationships: {
+              baseTerritory: { data: { type: "territories", id: "USA" } },
+            },
+          },
+          included: [territory("USA", "USD")],
+        });
+      case "/v1/appPriceSchedules/S1/manualPrices":
+        return Promise.resolve({
+          data: [
+            price("M1", "USA", null, "2027-01-01"),
+            price("M2", "USA", "2027-01-01", null),
+          ],
+          included: [
+            point("M1", "0.99", "0.84"),
+            point("M2", "1.99", "1.69"),
+            territory("USA", "USD"),
+          ],
+          links: { self: "x" },
+        });
+      case "/v1/appPriceSchedules/S1/automaticPrices":
+        // Two pages, to check the cursor is followed.
+        return Promise.resolve(
+          query.cursor === undefined
+            ? {
+                data: [price("A1", "JPN", null, null)],
+                included: [point("A1", "160", "136"), territory("JPN", "JPY")],
+                links: {
+                  self: "x",
+                  next: "https://api.appstoreconnect.apple.com/v1/appPriceSchedules/S1/automaticPrices?cursor=NEXT",
+                },
+              }
+            : {
+                data: [price("A2", "GBR", null, null)],
+                included: [
+                  point("A2", "0.99", "0.70"),
+                  territory("GBR", "GBP"),
+                ],
+                links: { self: "x" },
+              },
+        );
+      case "/v1/apps/123/appAvailabilityV2":
+        return Promise.resolve({
+          data: {
+            type: "appAvailabilities",
+            id: "AV1",
+            attributes: { availableInNewTerritories: true },
+          },
+        });
+      case "/v2/appAvailabilities/AV1/territoryAvailabilities":
+        return Promise.resolve({
+          data: [
+            availability("TA1", "USA", true),
+            availability("TA2", "GBR", false),
+            availability("TA3", "JPN", false),
+          ],
+          links: { self: "x" },
+        });
+      case "/v1/apps/123/appInfos":
+        return Promise.resolve({
+          data: [
+            {
+              type: "appInfos",
+              id: "AI1",
+              attributes: {
+                state: "PREPARE_FOR_SUBMISSION",
+                appStoreAgeRating: "FOUR_PLUS",
+              },
+            },
+          ],
+        });
+      case "/v1/appInfos/AI1":
+        return Promise.resolve({
+          data: {
+            type: "appInfos",
+            id: "AI1",
+            attributes: { state: appInfoState },
+          },
+        });
+      case "/v1/appInfos/AI1/ageRatingDeclaration":
+        return Promise.resolve({
+          data: {
+            type: "ageRatingDeclarations",
+            id: "D1",
+            attributes: {
+              gambling: false,
+              violenceRealistic: "NONE",
+              lootBox: null,
+              kidsAgeBand: null,
+            },
+          },
+        });
+      default:
+        return Promise.reject(new Error(`unexpected GET ${path}`));
+    }
+  });
+  let patches = 0;
+  const client: AscClient = {
+    ...noWrites(),
+    get: get as AscClient["get"],
+    patch: vi.fn(() =>
+      patches++ === failPatchAt
+        ? Promise.reject(new AscApiError(409, { errors: [] }))
+        : Promise.resolve({ data: {} }),
+    ) as AscClient["patch"],
+  };
+  return { client, provider: vi.fn<AscClientProvider>(() => client) };
+}
+
+describe("pricing", () => {
+  it("should print the base territory and the manual and automatic prices", async () => {
+    const { client, provider } = storeClient();
+    const result = await run(["pricing", "123"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/apps/123/appPriceSchedule",
+      expect.objectContaining({ include: ["baseTerritory"] }),
+    );
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/appPriceSchedules/S1/automaticPrices",
+      expect.objectContaining({ cursor: "NEXT" }),
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      appId: "123",
+      baseTerritory: { id: "USA", currency: "USD" },
+      manualPrices: [
+        {
+          territory: "USA",
+          currency: "USD",
+          customerPrice: "0.99",
+          proceeds: "0.84",
+          startDate: null,
+          endDate: "2027-01-01",
+        },
+        {
+          territory: "USA",
+          currency: "USD",
+          customerPrice: "1.99",
+          proceeds: "1.69",
+          startDate: "2027-01-01",
+          endDate: null,
+        },
+      ],
+      automaticPrices: [
+        {
+          territory: "JPN",
+          currency: "JPY",
+          customerPrice: "160",
+          proceeds: "136",
+          startDate: null,
+          endDate: null,
+        },
+        {
+          territory: "GBR",
+          currency: "GBP",
+          customerPrice: "0.99",
+          proceeds: "0.70",
+          startDate: null,
+          endDate: null,
+        },
+      ],
+    });
+  });
+
+  it("should filter by territory and reject a bad code", async () => {
+    const { client, provider } = storeClient();
+    const ok = await run(["pricing", "123", "--territory", "jpn"], provider);
+    expect(ok.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/appPriceSchedules/S1/manualPrices",
+      expect.objectContaining({ "filter[territory]": ["JPN"] }),
+    );
+    const bad = await run(["pricing", "123", "--territory", "US"], provider);
+    expect(bad.exitCode).toBe(1);
+    expect(bad.stderr).toContain("[invalid_input]");
+  });
+});
+
+describe("availability", () => {
+  it("should print each territory and those the app is missing from", async () => {
+    const { provider } = storeClient();
+    const result = await run(["availability", "123"], provider);
+    expect(result.exitCode).toBe(0);
+    const output = JSON.parse(result.stdout);
+    expect(output).toMatchObject({
+      appId: "123",
+      availableInNewTerritories: true,
+      availableCount: 1,
+      unavailable: ["GBR", "JPN"],
+    });
+    expect(output.territories[0]).toEqual({
+      territory: "USA",
+      available: true,
+      releaseDate: null,
+      preOrderEnabled: false,
+      preOrderPublishDate: null,
+      contentStatuses: ["AVAILABLE"],
+    });
+  });
+});
+
+describe("availability set", () => {
+  it("should show each territory's current availability without --yes", async () => {
+    const { client, provider } = storeClient();
+    const result = await run(
+      ["availability", "set", "123", "--territory", "usa,GBR", "--available"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("Dry run");
+    expect(client.patch).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "add-territories",
+      appId: "123",
+      territories: [
+        {
+          territory: "USA",
+          available: true,
+          contentStatuses: ["AVAILABLE"],
+          changes: false,
+        },
+        {
+          territory: "GBR",
+          available: false,
+          contentStatuses: ["CANNOT_SELL"],
+          changes: true,
+        },
+      ],
+    });
+  });
+
+  it("should change only the territories that differ with --yes", async () => {
+    const { client, provider } = storeClient();
+    const result = await run(
+      [
+        "availability",
+        "set",
+        "123",
+        "--territory",
+        "USA,GBR",
+        "--territory",
+        "JPN",
+        "--available",
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledTimes(2);
+    expect(client.patch).toHaveBeenCalledWith(
+      "/v1/territoryAvailabilities/TA2",
+      {
+        data: {
+          type: "territoryAvailabilities",
+          id: "TA2",
+          attributes: { available: true },
+        },
+      },
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "add-territories",
+      appId: "123",
+      changed: ["GBR", "JPN"],
+    });
+  });
+
+  it("should name the territories already changed when one fails", async () => {
+    const { provider } = storeClient({ failPatchAt: 1 });
+    const result = await run(
+      [
+        "availability",
+        "set",
+        "123",
+        "--territory",
+        "GBR,JPN",
+        "--available",
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[invalid_input] App Store Connect would not change availability in JPN",
+    );
+    expect(result.stderr).toContain("Already changed: GBR.");
+  });
+
+  it("should report a partway failure Apple did not reject as a conflict", async () => {
+    const { client, provider } = storeClient();
+    vi.mocked(client.patch)
+      .mockResolvedValueOnce({ data: {} })
+      .mockRejectedValueOnce(new AscApiError(503, undefined));
+    const result = await run(
+      [
+        "availability",
+        "set",
+        "123",
+        "--territory",
+        "GBR,JPN",
+        "--available",
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[unavailable]");
+    expect(result.stderr).toContain(
+      "Changing availability stopped partway. Already changed: GBR.",
+    );
+  });
+
+  it("should remove territories with --no-available", async () => {
+    const { client, provider } = storeClient();
+    const result = await run(
+      [
+        "availability",
+        "set",
+        "123",
+        "--territory",
+        "USA",
+        "--no-available",
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledWith(
+      "/v1/territoryAvailabilities/TA1",
+      {
+        data: {
+          type: "territoryAvailabilities",
+          id: "TA1",
+          attributes: { available: false },
+        },
+      },
+    );
+  });
+
+  it("should refuse a territory the app has no entry for, or a missing choice", async () => {
+    const { client, provider } = storeClient();
+    const unknown = await run(
+      ["availability", "set", "123", "--territory", "FRA", "--available"],
+      provider,
+    );
+    expect(unknown.exitCode).toBe(1);
+    expect(unknown.stderr).toContain(
+      "[not_found] App 123 has no availability entry for FRA",
+    );
+    const noChoice = await run(
+      ["availability", "set", "123", "--territory", "USA"],
+      provider,
+    );
+    expect(noChoice.exitCode).toBe(1);
+    expect(noChoice.stderr).toContain("--no-available");
+    const noTerritory = await run(
+      ["availability", "set", "123", "--available"],
+      provider,
+    );
+    expect(noTerritory.exitCode).toBe(1);
+    expect(noTerritory.stderr).toContain("--territory");
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+});
+
+describe("age-rating", () => {
+  it("should print each app info's declaration with every answer", async () => {
+    const { client, provider } = storeClient();
+    const result = await run(["age-rating", "123"], provider);
+    expect(result.exitCode).toBe(0);
+    // No field list, so new questions from Apple come through.
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/appInfos/AI1/ageRatingDeclaration",
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      appInfos: [
+        {
+          id: "AI1",
+          state: "PREPARE_FOR_SUBMISSION",
+          appStoreAgeRating: "FOUR_PLUS",
+          declaration: {
+            id: "D1",
+            answers: {
+              gambling: false,
+              violenceRealistic: "NONE",
+              lootBox: null,
+              kidsAgeBand: null,
+            },
+          },
+        },
+      ],
+    });
+  });
+});
+
+describe("age-rating set", () => {
+  const args = [
+    "age-rating",
+    "set",
+    "AI1",
+    "--answer",
+    "gambling=false",
+    "--answer",
+    "violenceRealistic=INFREQUENT",
+    "--answer",
+    "lootBox=true",
+  ];
+
+  it("should show the current and new answers without --yes", async () => {
+    const { client, provider } = storeClient();
+    const result = await run(args, provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "age-rating",
+      appInfo: { id: "AI1", state: "PREPARE_FOR_SUBMISSION" },
+      declarationId: "D1",
+      current: { gambling: false, violenceRealistic: "NONE", lootBox: null },
+      update: {
+        gambling: false,
+        violenceRealistic: "INFREQUENT",
+        lootBox: true,
+      },
+      changes: true,
+    });
+  });
+
+  it("should send only the changed answers with --yes", async () => {
+    const { client, provider } = storeClient();
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledWith("/v1/ageRatingDeclarations/D1", {
+      data: {
+        type: "ageRatingDeclarations",
+        id: "D1",
+        attributes: { violenceRealistic: "INFREQUENT", lootBox: true },
+      },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "age-rating",
+      appInfoId: "AI1",
+      declarationId: "D1",
+      changed: ["violenceRealistic", "lootBox"],
+    });
+  });
+
+  it("should name the answers Apple rejects", async () => {
+    const { provider } = storeClient({ failPatchAt: 0 });
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[invalid_input] App Store Connect rejected the age rating answers violenceRealistic, lootBox",
+    );
+    expect(result.stderr).toContain("INFREQUENT_OR_MILD");
+  });
+
+  it("should refuse an app info that is no longer editable", async () => {
+    const { client, provider } = storeClient({
+      appInfoState: "READY_FOR_DISTRIBUTION",
+    });
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[invalid_input] App info AI1 is READY_FOR_DISTRIBUTION",
+    );
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should refuse a question the declaration does not have, and bad answers", async () => {
+    const { client, provider } = storeClient();
+    const unknown = await run(
+      ["age-rating", "set", "AI1", "--answer", "horror=NONE"],
+      provider,
+    );
+    expect(unknown.exitCode).toBe(1);
+    expect(unknown.stderr).toContain(
+      "[invalid_input] The age rating declaration has no question named horror",
+    );
+    const malformed = await run(
+      ["age-rating", "set", "AI1", "--answer", "gambling"],
+      provider,
+    );
+    expect(malformed.exitCode).toBe(1);
+    expect(malformed.stderr).toContain("name=value");
+    const twice = await run(
+      [
+        "age-rating",
+        "set",
+        "AI1",
+        "--answer",
+        "gambling=true",
+        "--answer",
+        "gambling=false",
+      ],
+      provider,
+    );
+    expect(twice.exitCode).toBe(1);
+    expect(twice.stderr).toContain("Give each answer once.");
+    const none = await run(["age-rating", "set", "AI1"], provider);
+    expect(none.exitCode).toBe(1);
+    expect(none.stderr).toContain("--answer");
+    expect(client.patch).not.toHaveBeenCalled();
   });
 });

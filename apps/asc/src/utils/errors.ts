@@ -41,6 +41,21 @@ export class NotFoundError extends Error {
   override name = "NotFoundError";
 }
 
+/** Thrown when a version or app info is in a state that no longer accepts the change. */
+export class NotEditableError extends Error {
+  override name = "NotEditableError";
+}
+
+/** Thrown when the input names something App Store Connect would reject, such as a file of an unknown size. */
+export class InvalidInputError extends Error {
+  override name = "InvalidInputError";
+}
+
+/** Thrown when an upload or another multi-step write stops partway; its message says what was already done and its cause why it stopped. */
+export class UploadIncompleteError extends Error {
+  override name = "UploadIncompleteError";
+}
+
 /** Thrown when `builds wait` gives up before the build finishes processing. */
 export class WaitTimeoutError extends Error {
   override name = "WaitTimeoutError";
@@ -110,6 +125,10 @@ function networkCode(error: unknown): string | undefined {
 
 /** Classify any error thrown while talking to App Store Connect into an actionable, non-sensitive message. */
 export function classifyError(error: unknown): ClassifiedError {
+  if (error instanceof UploadIncompleteError) {
+    const cause = classifyError(error.cause);
+    return { ...cause, message: `${cause.message} ${error.message}` };
+  }
   if (error instanceof CredentialsError) {
     return { kind: "auth", message: error.message };
   }
@@ -118,6 +137,9 @@ export function classifyError(error: unknown): ClassifiedError {
   }
   if (error instanceof NotFoundError) {
     return { kind: "not_found", message: error.message };
+  }
+  if (error instanceof NotEditableError || error instanceof InvalidInputError) {
+    return { kind: "invalid_input", message: error.message };
   }
   if (error instanceof WaitTimeoutError) {
     return { kind: "unavailable", message: error.message };

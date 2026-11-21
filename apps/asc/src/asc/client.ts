@@ -32,6 +32,15 @@ export type AscQuery = Record<
   string | number | boolean | readonly string[] | undefined
 >;
 
+/** One part of a file upload, as an asset reservation's `uploadOperations` lists it. */
+export interface UploadOperation {
+  method?: string;
+  url?: string;
+  length?: number;
+  offset?: number;
+  requestHeaders?: { name?: string; value?: string }[];
+}
+
 /** The App Store Connect operations the commands depend on. */
 export interface AscClient {
   get<T>(path: string, query?: AscQuery): Promise<T>;
@@ -47,6 +56,14 @@ export interface AscClient {
    * from a relationship sends the resources to remove as the body.
    */
   delete(path: string, body?: unknown): Promise<void>;
+  /**
+   * Sends one part of a file to the URL Apple's reservation gave, with its
+   * headers and no token: those URLs are pre-signed.
+   */
+  upload(
+    operation: UploadOperation,
+    part: Uint8Array<ArrayBuffer>,
+  ): Promise<void>;
 }
 
 export interface AscClientOptions {
@@ -60,6 +77,7 @@ const AUDIENCE = "appstoreconnect-v1";
 // Apple accepts up to 20 minutes; a fresh short-lived token is signed per request.
 const TOKEN_LIFETIME_S = 120;
 const TIMEOUT_MS = 30_000;
+const UPLOAD_TIMEOUT_MS = 300_000;
 /** What `request` returns for a 204, which has no body by design. */
 const NO_CONTENT = Symbol("no content");
 
@@ -150,6 +168,44 @@ export async function createAscClient(
     },
     async delete(path: string, body?: unknown): Promise<void> {
       await request("DELETE", new URL(path, ASC_API), body);
+    },
+    async upload(
+      operation: UploadOperation,
+      part: Uint8Array<ArrayBuffer>,
+    ): Promise<void> {
+      let url: URL;
+      try {
+        url = new URL(operation.url ?? "");
+      } catch {
+        url = new URL("invalid:");
+      }
+      if (url.protocol !== "https:") {
+        throw new UnexpectedResponseError(
+          "App Store Connect returned an upload operation without an HTTPS URL.",
+        );
+      }
+      const headers: Record<string, string> = {};
+      for (const { name, value } of operation.requestHeaders ?? []) {
+        if (name && value !== undefined) headers[name] = value;
+      }
+      const response = await send(url, {
+        method: operation.method ?? "PUT",
+        headers,
+        body: part,
+        signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+      }).catch((error: unknown) => {
+        if (error instanceof TypeError) {
+          throw new NetworkError("fetch failed", { cause: error });
+        }
+        throw error;
+      });
+      await response.body?.cancel();
+      // The URL is pre-signed and time-limited, so a refusal is not about the API key.
+      if (!response.ok) {
+        throw new UnexpectedResponseError(
+          `Apple's storage refused part of the file with HTTP ${response.status}; the upload URL may have expired, so run the upload again.`,
+        );
+      }
     },
   };
 }
