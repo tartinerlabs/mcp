@@ -1,3 +1,9 @@
+## [0.20.0](https://github.com/tartinerlabs/mcp/compare/v0.19.0...v0.20.0) (2026-11-21)
+
+### Features
+
+* **asc:** read TestFlight groups, testers and feedback ([958a000](https://github.com/tartinerlabs/mcp/commit/958a000a96da620139d9f80ba1fcad4f9b2cb263))
+
 ## [0.19.0](https://github.com/tartinerlabs/mcp/compare/v0.18.1...v0.19.0) (2026-11-21)
 
 ### Features
