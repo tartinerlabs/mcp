@@ -1,3 +1,9 @@
+## [0.15.0](https://github.com/tartinerlabs/mcp/compare/v0.14.1...v0.15.0) (2026-11-21)
+
+### Features
+
+* **asc:** add cursor pagination to list commands ([f88d9be](https://github.com/tartinerlabs/mcp/commit/f88d9bedc5dedb309aaaa8ff773fa73cf797eb76))
+
 ## [0.14.1](https://github.com/tartinerlabs/mcp/compare/v0.14.0...v0.14.1) (2026-11-15)
 
 
