@@ -35,6 +35,24 @@ import {
   uploadCustomPageScreenshots,
 } from "./commands/custom-pages.ts";
 import {
+  BADGES,
+  createEvent,
+  createEventInput,
+  eventInput,
+  eventsInput,
+  getEvent,
+  listEvents,
+  PRIORITIES,
+  PURCHASE_REQUIREMENTS,
+  PURPOSES,
+  setEvent,
+  setEventInput,
+  submitEvent,
+  submitEventInput,
+  uploadEventInput,
+  uploadEventMedia,
+} from "./commands/events.ts";
+import {
   getMetadata,
   metadataInput,
   setMetadata,
@@ -171,7 +189,7 @@ export function createProgram(
   const program = new Command()
     .name("asc")
     .description(
-      "App Store Connect with your own API key: apps, versions and their metadata, screenshots and app previews, custom product pages, product page optimization tests, app info, builds, release status, TestFlight groups, testers, feedback and notes, and customer reviews. Commands that change anything only print what they would do unless given --yes.",
+      "App Store Connect with your own API key: apps, versions and their metadata, screenshots and app previews, custom product pages, product page optimization tests, in-app events, app info, builds, release status, TestFlight groups, testers, feedback and notes, and customer reviews. Commands that change anything only print what they would do unless given --yes.",
     )
     .version(pkg.version)
     .option("--key-id <id>", "API key ID (default: ASC_KEY_ID)")
@@ -669,6 +687,148 @@ export function createProgram(
         stopPageTest,
       );
     });
+
+  const events = program
+    .command("events")
+    .description(
+      "An app's in-app events: id, reference name, state, badge, priority, purpose, primary locale, deep link, and each schedule's territories and publish, start and end dates. Commands that change anything need a key with the App Manager role.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option(
+      "--state <states>",
+      "only these states, comma-separated, such as DRAFT,PUBLISHED",
+    )
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (appId: string, options, command: Command) => {
+      await run(command, eventsInput, { appId, ...options }, listEvents);
+    });
+
+  events
+    .command("show")
+    .description(
+      "One in-app event with each locale's name, short and long description, and its event card and details page images and videos.",
+    )
+    .argument("<event-id>", "event id from the events command")
+    .action(async (eventId: string, _options, command: Command) => {
+      await run(command, eventInput, { eventId }, getEvent);
+    });
+
+  events
+    .command("create")
+    .description(
+      "Create an in-app event in its primary locale, with one schedule and that locale's name and descriptions when given; add images with events upload, then submit it. Without --yes, prints the event and how many the app already has.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option(
+      "--reference-name <name>",
+      "the event's name in App Store Connect (required)",
+    )
+    .option(
+      "--locale <locale>",
+      "the event's primary locale, such as en-US (required)",
+    )
+    .option("--name <text>", "the event's name in that locale")
+    .option("--short-description <text>", "its short description")
+    .option("--long-description <text>", "its long description")
+    .addOption(
+      new Option("--badge <badge>", "the event's badge").choices([...BADGES]),
+    )
+    .addOption(
+      new Option("--purpose <purpose>", "who the event is for").choices([
+        ...PURPOSES,
+      ]),
+    )
+    .addOption(
+      new Option("--priority <priority>", "the event's priority").choices([
+        ...PRIORITIES,
+      ]),
+    )
+    .addOption(
+      new Option(
+        "--purchase-requirement <requirement>",
+        "whether taking part needs an in-app purchase",
+      ).choices([...PURCHASE_REQUIREMENTS]),
+    )
+    .option("--deep-link <url>", "the URL the app opens from the event")
+    .option(
+      "--territories <codes>",
+      "the schedule's territories, comma-separated, such as USA,GBR",
+    )
+    .option(
+      "--publish-start <date-time>",
+      "when the event card appears, such as 2026-12-01T09:00:00Z",
+    )
+    .option("--event-start <date-time>", "when the event starts")
+    .option("--event-end <date-time>", "when the event ends")
+    .option(...YES)
+    .action(async (appId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        createEventInput,
+        { appId, ...options },
+        createEvent,
+      );
+    });
+
+  events
+    .command("set")
+    .description(
+      "Change one locale's event name, short or long description, adding the locale when the event has none. Only an event in draft or rejected accepts changes. Without --yes, prints the current and new values.",
+    )
+    .argument("<event-id>", "event id from the events command")
+    .option("--locale <locale>", "the locale to change, such as en-US")
+    .option("--name <text>", "the event's name")
+    .option("--short-description <text>", "the short description")
+    .option("--long-description <text>", "the long description")
+    .option(...YES)
+    .action(async (eventId: string, options, command: Command) => {
+      await runWrite(command, setEventInput, { eventId, ...options }, setEvent);
+    });
+
+  events
+    .command("upload")
+    .description(
+      "Upload a folder of event card and details page images and videos to an event, through the asset library as screenshots upload does: one subfolder per locale, each file naming EVENT_CARD_ASSET or EVENT_DETAILS_PAGE_ASSET, and its group when the type has more than one. Only an event in draft or rejected accepts them. Without --yes, prints where each file would go.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .argument("<event-id>", "event id from the events command")
+    .option("--dir <folder>", "the folder of locale subfolders (required)")
+    .option(...YES)
+    .action(
+      async (appId: string, eventId: string, options, command: Command) => {
+        await runWrite(
+          command,
+          uploadEventInput,
+          { appId, eventId, ...options },
+          uploadEventMedia,
+        );
+      },
+    );
+
+  events
+    .command("submit")
+    .description(
+      "Submit an event for App Review on its own. Refuses when the app has a review submission being prepared with other items, which would go for review too. Without --yes, prints the event, the submission it would use and how many of the app's events are past review, since Apple limits how many run at once.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .argument("<event-id>", "event id from the events command")
+    .addOption(
+      new Option("--platform <platform>", "the review submission's platform")
+        .choices([...PLATFORMS])
+        .default("IOS"),
+    )
+    .option(...YES)
+    .action(
+      async (appId: string, eventId: string, options, command: Command) => {
+        await runWrite(
+          command,
+          submitEventInput,
+          { appId, eventId, ...options },
+          submitEvent,
+        );
+      },
+    );
 
   const builds = program
     .command("builds")

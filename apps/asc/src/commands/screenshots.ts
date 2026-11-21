@@ -30,12 +30,30 @@ const versionIdSchema = idSchema("versions");
 const placementIdSchema = idSchema("screenshots");
 
 const PLACEMENT_TYPES = ["APP_SCREENSHOT", "APP_PREVIEW"] as const;
-type PlacementType = (typeof PLACEMENT_TYPES)[number];
+/** An in-app event's card and details page; each takes an image or a video. */
+export const EVENT_PLACEMENT_TYPES = [
+  "EVENT_CARD_ASSET",
+  "EVENT_DETAILS_PAGE_ASSET",
+] as const;
+type PlacementType =
+  | (typeof PLACEMENT_TYPES)[number]
+  | (typeof EVENT_PLACEMENT_TYPES)[number];
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg"]);
 const VIDEO_EXTENSIONS = new Set([".mp4", ".m4v", ".mov"]);
-/** The asset category for files placed as screenshots and previews. */
-const CATEGORY = "APP_SCREENSHOTS_AND_PREVIEWS";
+
+const isVideo = (file: string) =>
+  VIDEO_EXTENSIONS.has(extname(file).toLowerCase());
+
+/**
+ * The asset category a placement type accepts: screenshots and previews
+ * take their own, and the creative types such as event cards take
+ * CREATIVE_ASSETS.
+ */
+const category = (type: PlacementType) =>
+  type === "APP_SCREENSHOT" || type === "APP_PREVIEW"
+    ? "APP_SCREENSHOTS_AND_PREVIEWS"
+    : "CREATIVE_ASSETS";
 
 interface PlacementAttributes {
   placementType?: string;
@@ -80,24 +98,26 @@ function shapePlacement(
   };
 }
 
-/** Where placements go: an App Store version's localizations, a custom product page version's or a product page test treatment's. */
+/** Where placements go: an App Store version's localizations, a custom product page version's, a product page test treatment's or an in-app event's. */
 type LocalizationType =
   | "appStoreVersionLocalizations"
   | "appCustomProductPageLocalizations"
-  | "appStoreVersionExperimentTreatmentLocalizations";
+  | "appStoreVersionExperimentTreatmentLocalizations"
+  | "appEventLocalizations";
 
-/** A localization's screenshots and previews in display order. */
-async function listPlacements(
+/** A localization's screenshots and previews, or the given placement types, in display order. */
+export async function listPlacements(
   client: AscClient,
   localizationId: string,
   placementGroup?: string,
   localizationType: LocalizationType = "appStoreVersionLocalizations",
+  placementTypes: readonly PlacementType[] = PLACEMENT_TYPES,
 ) {
   // Ten screenshots and three previews per group fit easily in one page.
   const response = await client.get<AscDocument<PlacementAttributes>>(
     `/v1/${localizationType}/${localizationId}/placements`,
     {
-      "filter[placementType]": PLACEMENT_TYPES,
+      "filter[placementType]": placementTypes,
       "filter[placementGroup]": placementGroup,
       sort: "placementGroupPosition",
       limit: 200,
@@ -235,7 +255,11 @@ async function readRefData(client: AscClient) {
       ?.specMappings ?? [];
   return {
     /** How many of this type a localization's group holds under a feature, if Apple says. */
-    maxCount: (type: PlacementType, group: string, feature: string) =>
+    maxCount: (
+      type: PlacementType,
+      group: string | undefined,
+      feature: string,
+    ) =>
       (
         attributes.features?.find(({ featureId }) => featureId === feature) ??
         attributes.features?.find(
@@ -243,14 +267,15 @@ async function readRefData(client: AscClient) {
         )
       )?.placementPolicies
         ?.find(({ placementType }) => placementType === type)
-        ?.groupLimits?.find(({ groupIds }) => groupIds?.includes(group))
-        ?.maxCount,
+        ?.groupLimits?.find(
+          ({ groupIds }) => group !== undefined && groupIds?.includes(group),
+        )?.maxCount,
     groups: (type: PlacementType) =>
       mappings(type).flatMap(({ placementGroupId }) =>
         placementGroupId ? [placementGroupId] : [],
       ),
-    /** Screenshot groups with a spec of exactly this size, in either orientation. */
-    screenshotGroupsFor(width: number, height: number) {
+    /** The type's groups with an image spec of this size, in either orientation. */
+    groupsFor(type: PlacementType, width: number, height: number) {
       const fits = (min?: number, max?: number, value?: number) =>
         min !== undefined && max !== undefined && value !== undefined
           ? value >= min && value <= max
@@ -269,7 +294,7 @@ async function readRefData(client: AscClient) {
           )
           .flatMap(({ specId }) => (specId ? [specId] : [])),
       );
-      return mappings("APP_SCREENSHOT")
+      return mappings(type)
         .filter(({ specs: ids }) => ids?.some((id) => specs.has(id)))
         .flatMap(({ placementGroupId }) =>
           placementGroupId ? [placementGroupId] : [],
@@ -334,7 +359,13 @@ export interface UploadTarget {
   relationship:
     | "appStoreVersionLocalization"
     | "appCustomProductPageLocalization"
-    | "appStoreVersionExperimentTreatmentLocalization";
+    | "appStoreVersionExperimentTreatmentLocalization"
+    | "appEventLocalization";
+  /**
+   * The placement types a file names in its file name, such as an in-app
+   * event's; without them, images are screenshots and videos app previews.
+   */
+  placementTypes?: readonly PlacementType[];
   /**
    * The ref data feature whose group limits apply; App Store versions' limits
    * are used when Apple lists none for it.
@@ -353,7 +384,8 @@ export interface PlannedFile {
   file: string;
   path: string;
   placementType: PlacementType;
-  placementGroup: string;
+  /** Left out for an event type Apple's ref data lists no group for. */
+  placementGroup?: string;
   fileSize: number;
 }
 
@@ -396,16 +428,22 @@ export async function planUpload(
       .sort(byName);
     for (const file of names) {
       const extension = extname(file).toLowerCase();
-      const placementType: PlacementType | undefined = IMAGE_EXTENSIONS.has(
-        extension,
-      )
-        ? "APP_SCREENSHOT"
-        : VIDEO_EXTENSIONS.has(extension)
-          ? "APP_PREVIEW"
-          : undefined;
-      if (!placementType) {
+      if (!IMAGE_EXTENSIONS.has(extension) && !isVideo(file)) {
         skipped.push(`${locale}/${file}`);
         continue;
+      }
+      // The longest type named in the file wins, as for groups below.
+      const placementType: PlacementType | undefined = target.placementTypes
+        ? target.placementTypes
+            .filter((type) => file.toUpperCase().includes(type))
+            .sort((a, b) => b.length - a.length)[0]
+        : isVideo(file)
+          ? "APP_PREVIEW"
+          : "APP_SCREENSHOT";
+      if (!placementType) {
+        throw new InvalidInputError(
+          `${locale}/${file}: put where it goes in its file name: ${target.placementTypes?.join(" or ")}.`,
+        );
       }
       const path = join(dir, locale, file);
       // The longest group named in the file wins, so IPAD_PRO_3GEN_129 beats a shorter prefix.
@@ -414,10 +452,20 @@ export async function planUpload(
         .filter((group) => file.toUpperCase().includes(group))
         .sort((a, b) => b.length - a.length)[0];
       let placementGroup = named;
-      if (!placementGroup && placementType === "APP_SCREENSHOT") {
+      // A type with a single group, as an in-app event's may have, needs no name.
+      const typeGroups = refData.groups(placementType);
+      if (!placementGroup && target.placementTypes && typeGroups.length === 1) {
+        placementGroup = typeGroups[0];
+      }
+      // Assumption: Apple's docs name no groups for in-app event types and make
+      // placementGroup optional, so an event type with none in the ref data is
+      // placed without one.
+      const groupless =
+        Boolean(target.placementTypes) && typeGroups.length === 0;
+      if (!placementGroup && !groupless && !isVideo(file)) {
         const size = imageSize(await readFile(path));
         const groups = size
-          ? refData.screenshotGroupsFor(size.width, size.height)
+          ? refData.groupsFor(placementType, size.width, size.height)
           : [];
         if (groups.length > 1) {
           throw new InvalidInputError(
@@ -426,14 +474,16 @@ export async function planUpload(
         }
         if (groups.length === 0) {
           throw new InvalidInputError(
-            `${locale}/${file} is ${size ? `${size.width}x${size.height}, which is not a screenshot size App Store Connect accepts` : "not a PNG or JPEG image whose size could be read"}. Put the device group in the file name, such as IPHONE_DYNAMIC_ISLAND_LARGE_PROFILE.`,
+            `${locale}/${file} is ${size ? `${size.width}x${size.height}, which is not a size App Store Connect accepts for ${placementType}` : "not a PNG or JPEG image whose size could be read"}. Put the group in the file name, such as ${typeGroups[0] ?? "IPHONE_DYNAMIC_ISLAND_LARGE_PROFILE"}.`,
           );
         }
         placementGroup = groups[0];
       }
-      if (!placementGroup) {
+      if (!placementGroup && !groupless) {
         throw new InvalidInputError(
-          `${locale}/${file}: put the device group of an app preview in its file name, such as IPHONE_DYNAMIC_ISLAND_LARGE_PROFILE-1.mp4.`,
+          placementType === "APP_PREVIEW"
+            ? `${locale}/${file}: put the device group of an app preview in its file name, such as IPHONE_DYNAMIC_ISLAND_LARGE_PROFILE-1.mp4.`
+            : `${locale}/${file}: put the group of its ${placementType} video in its file name: ${typeGroups.join(", ")}.`,
         );
       }
       files.push({
@@ -449,7 +499,7 @@ export async function planUpload(
   }
   if (files.length === 0) {
     throw new InvalidInputError(
-      `${dir} has no screenshots (.png, .jpg) or app previews (.mp4, .m4v, .mov) in its locale folders.`,
+      `${dir} has no images (.png, .jpg) or videos (.mp4, .m4v, .mov) in its locale folders.`,
     );
   }
   // Apple refuses a placement past a group's limit, so check before writing anything.
@@ -461,6 +511,7 @@ export async function planUpload(
       planned[0]?.localizationId ?? "",
       undefined,
       target.localizationType,
+      target.placementTypes,
     );
     const checked = new Set<string>();
     for (const { placementType, placementGroup } of planned) {
@@ -496,10 +547,9 @@ async function uploadAsset(
   libraryId: string,
   file: PlannedFile,
 ): Promise<string> {
-  const type =
-    file.placementType === "APP_SCREENSHOT"
-      ? "appAssetLibraryImages"
-      : "appAssetLibraryVideos";
+  const type = isVideo(file.file)
+    ? "appAssetLibraryVideos"
+    : "appAssetLibraryImages";
   const bytes = await readFile(file.path);
   if (bytes.length !== file.fileSize) {
     throw new InvalidInputError(
@@ -514,7 +564,7 @@ async function uploadAsset(
         attributes: {
           fileName: file.file,
           fileSize: file.fileSize,
-          category: CATEGORY,
+          category: category(file.placementType),
         },
         relationships: {
           assetLibrary: { data: { type: "appAssetLibraries", id: libraryId } },
@@ -571,10 +621,9 @@ export async function placeFiles(
   for (const [index, file] of files.entries()) {
     try {
       const assetId = await uploadAsset(client, library.id, file);
-      const assetRelationship =
-        file.placementType === "APP_SCREENSHOT"
-          ? { image: { data: { type: "appAssetLibraryImages", id: assetId } } }
-          : { video: { data: { type: "appAssetLibraryVideos", id: assetId } } };
+      const assetRelationship = isVideo(file.file)
+        ? { video: { data: { type: "appAssetLibraryVideos", id: assetId } } }
+        : { image: { data: { type: "appAssetLibraryImages", id: assetId } } };
       const placement = await client.post<{ data: AscResource }>(
         "/v1/appAssetLibraryPlacements",
         {
@@ -810,7 +859,11 @@ export async function deleteScreenshots(
       include: [...PLACEMENT_FIELDS.include, "appStoreVersionLocalization"],
     });
     const placement = shapePlacement(response, response.data);
-    if (!PLACEMENT_TYPES.includes(placement.placementType as PlacementType)) {
+    if (
+      !(PLACEMENT_TYPES as readonly string[]).includes(
+        placement.placementType ?? "",
+      )
+    ) {
       throw new InvalidInputError(
         `${id} is a ${placement.placementType} placement, not a screenshot or app preview.`,
       );

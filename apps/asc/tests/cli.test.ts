@@ -4622,3 +4622,784 @@ describe("page-tests start and stop", () => {
     expect(client.patch).not.toHaveBeenCalled();
   });
 });
+
+const EVENT_CARD = "EVENT_CARD_PROFILE";
+
+/**
+ * In-app event E1 of app 123 with en-US localization EL1, on top of the
+ * screenshots mock for the asset library, with ref data for event placements.
+ */
+function eventsClient({
+  state = "DRAFT",
+  cardPlaced = false,
+  drafts = [] as { id: string; items: Record<string, unknown>[] }[],
+} = {}) {
+  const base = screenshotsClient();
+  const baseGet = vi.mocked(base.client.get).getMockImplementation();
+  const event = {
+    type: "appEvents",
+    id: "E1",
+    attributes: {
+      referenceName: "Winter challenge",
+      badge: "CHALLENGE",
+      eventState: state,
+      priority: "NORMAL",
+      purpose: "KEEP_ACTIVE_USERS_INFORMED",
+      purchaseRequirement: "NO_COST_ASSOCIATED",
+      primaryLocale: "en-US",
+      deepLink: null,
+      territorySchedules: [
+        {
+          territories: ["USA", "GBR"],
+          publishStart: "2026-12-01T00:00:00Z",
+          eventStart: "2026-12-05T00:00:00Z",
+          eventEnd: "2026-12-20T00:00:00Z",
+        },
+      ],
+    },
+  };
+  const localization = {
+    type: "appEventLocalizations",
+    id: "EL1",
+    attributes: {
+      locale: "en-US",
+      name: "Winter challenge",
+      shortDescription: "Beat the cold",
+      longDescription: null,
+    },
+  };
+  const get = vi.fn((path: string, query: Record<string, unknown> = {}) => {
+    if (path === "/v1/apps/123/appEvents") {
+      const id = query["filter[id]"];
+      return Promise.resolve({
+        data: id === undefined || id === "E1" ? [event] : [],
+        links: { self: "https://api.appstoreconnect.apple.com/v1/x" },
+        meta: { paging: { total: 4, limit: 50 } },
+      });
+    }
+    if (path === "/v1/appEvents/E1") {
+      return Promise.resolve({ data: event });
+    }
+    if (path === "/v1/appEvents/E1/localizations") {
+      return Promise.resolve({ data: [localization] });
+    }
+    if (path === "/v1/appEvents/E2/localizations") {
+      return Promise.resolve({ data: [] });
+    }
+    if (path === "/v1/appEventLocalizations/EL1/placements") {
+      return Promise.resolve({
+        data: cardPlaced
+          ? [
+              {
+                type: "appAssetLibraryPlacements",
+                id: "EP1",
+                attributes: {
+                  placementType: "EVENT_CARD_ASSET",
+                  placementGroup: EVENT_CARD,
+                  state: "PARENT_PREPARE_FOR_SUBMISSION",
+                },
+                relationships: {
+                  image: { data: { type: "appAssetLibraryImages", id: "I9" } },
+                },
+              },
+            ]
+          : [],
+        included: [
+          {
+            type: "appAssetLibraryImages",
+            id: "I9",
+            attributes: {
+              fileName: "card.png",
+              state: "PREPARE_FOR_SUBMISSION",
+            },
+          },
+        ],
+      });
+    }
+    if (path === "/v1/appAssetLibraryRefData") {
+      return Promise.resolve({
+        data: [
+          {
+            type: "appAssetLibraryRefData",
+            id: "1",
+            attributes: {
+              imageSpecs: [],
+              placementTypes: [
+                {
+                  placementTypeId: "EVENT_CARD_ASSET",
+                  specMappings: [{ placementGroupId: EVENT_CARD, specs: [] }],
+                },
+                {
+                  placementTypeId: "EVENT_DETAILS_PAGE_ASSET",
+                  specMappings: [
+                    { placementGroupId: "EVENT_DETAILS_IPHONE", specs: [] },
+                    { placementGroupId: "EVENT_DETAILS_IPAD", specs: [] },
+                  ],
+                },
+              ],
+              features: [
+                {
+                  featureId: "IN_APP_EVENTS",
+                  placementPolicies: [
+                    {
+                      placementType: "EVENT_CARD_ASSET",
+                      groupLimits: [{ groupIds: [EVENT_CARD], maxCount: 1 }],
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      });
+    }
+    if (path === "/v1/reviewSubmissions") {
+      return Promise.resolve({
+        data: drafts.map(({ id }) => ({ type: "reviewSubmissions", id })),
+      });
+    }
+    const draft = drafts.find(
+      ({ id }) => path === `/v1/reviewSubmissions/${id}/items`,
+    );
+    if (draft) return Promise.resolve({ data: draft.items });
+    return baseGet?.(path, query as AscQuery) as never;
+  });
+  const basePost = vi.mocked(base.client.post).getMockImplementation();
+  const post = vi.fn((path: string, body: unknown) => {
+    if (path === "/v1/appEvents") {
+      const { data } = body as { data: { attributes: object } };
+      return Promise.resolve({
+        data: {
+          type: "appEvents",
+          id: "E2",
+          attributes: { ...data.attributes, eventState: "DRAFT" },
+        },
+      });
+    }
+    if (path === "/v1/appEventLocalizations") {
+      const { data } = body as { data: { attributes: object } };
+      return Promise.resolve({
+        data: {
+          type: "appEventLocalizations",
+          id: "EL9",
+          attributes: data.attributes,
+        },
+      });
+    }
+    if (path === "/v1/reviewSubmissions") {
+      return Promise.resolve({
+        data: { type: "reviewSubmissions", id: "RS9" },
+      });
+    }
+    if (path === "/v1/reviewSubmissionItems") {
+      return Promise.resolve({
+        data: { type: "reviewSubmissionItems", id: "RI1" },
+      });
+    }
+    return basePost?.(path, body) as never;
+  });
+  const patch = vi.fn((path: string, body: unknown) => {
+    if (path.startsWith("/v1/reviewSubmissions/")) {
+      return Promise.resolve({
+        data: {
+          type: "reviewSubmissions",
+          id: path.split("/").pop(),
+          attributes: { state: "WAITING_FOR_REVIEW" },
+        },
+      });
+    }
+    if (path === "/v1/appEventLocalizations/EL1") {
+      const { data } = body as { data: { attributes: object } };
+      return Promise.resolve({
+        data: {
+          ...localization,
+          attributes: { ...localization.attributes, ...data.attributes },
+        },
+      });
+    }
+    return Promise.resolve({ data: {} });
+  });
+  const client: AscClient = {
+    ...base.client,
+    get: get as AscClient["get"],
+    post: post as AscClient["post"],
+    patch: patch as AscClient["patch"],
+  };
+  return { client, provider: vi.fn<AscClientProvider>(() => client) };
+}
+
+const EVENT_E1 = {
+  id: "E1",
+  referenceName: "Winter challenge",
+  badge: "CHALLENGE",
+  state: "DRAFT",
+  priority: "NORMAL",
+  purpose: "KEEP_ACTIVE_USERS_INFORMED",
+  purchaseRequirement: "NO_COST_ASSOCIATED",
+  primaryLocale: "en-US",
+  deepLink: null,
+  territorySchedules: [
+    {
+      territories: ["USA", "GBR"],
+      publishStart: "2026-12-01T00:00:00Z",
+      eventStart: "2026-12-05T00:00:00Z",
+      eventEnd: "2026-12-20T00:00:00Z",
+    },
+  ],
+};
+
+describe("events", () => {
+  it("should list an app's events with their schedules, filtered by state", async () => {
+    const { client, provider } = eventsClient();
+    const result = await run(
+      ["events", "123", "--state", "DRAFT,PUBLISHED"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/apps/123/appEvents",
+      expect.objectContaining({
+        "filter[eventState]": ["DRAFT", "PUBLISHED"],
+        limit: 50,
+      }),
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      events: [EVENT_E1],
+      total: 4,
+      hasMore: false,
+    });
+  });
+
+  it("should reject an unknown state", async () => {
+    const { client, provider } = eventsClient();
+    const result = await run(["events", "123", "--state", "LIVE"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+
+  it("should show an event's localizations and their event images", async () => {
+    const { client, provider } = eventsClient({ cardPlaced: true });
+    const result = await run(["events", "show", "E1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/appEventLocalizations/EL1/placements",
+      expect.objectContaining({
+        "filter[placementType]": [
+          "EVENT_CARD_ASSET",
+          "EVENT_DETAILS_PAGE_ASSET",
+        ],
+      }),
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      event: EVENT_E1,
+      localizations: [
+        {
+          id: "EL1",
+          locale: "en-US",
+          name: "Winter challenge",
+          shortDescription: "Beat the cold",
+          longDescription: null,
+          placements: [
+            {
+              id: "EP1",
+              placementType: "EVENT_CARD_ASSET",
+              placementGroup: EVENT_CARD,
+              state: "PARENT_PREPARE_FOR_SUBMISSION",
+              fileName: "card.png",
+              assetState: "PREPARE_FOR_SUBMISSION",
+            },
+          ],
+        },
+      ],
+    });
+  });
+});
+
+describe("events create", () => {
+  const args = [
+    "events",
+    "create",
+    "123",
+    "--reference-name",
+    "Spring sprint",
+    "--locale",
+    "en-US",
+    "--name",
+    "Spring sprint",
+    "--short-description",
+    "Run every day",
+    "--badge",
+    "CHALLENGE",
+    "--territories",
+    "USA,GBR",
+    "--event-start",
+    "2027-03-01T00:00:00Z",
+    "--event-end",
+    "2027-03-31T00:00:00Z",
+  ];
+
+  it("should show the event and how many the app has without --yes", async () => {
+    const { client, provider } = eventsClient();
+    const result = await run(args, provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.post).not.toHaveBeenCalled();
+    expect(result.stderr).toContain("Dry run");
+    const output = JSON.parse(result.stdout);
+    expect(output).toMatchObject({
+      dryRun: true,
+      action: "create",
+      appId: "123",
+      event: {
+        referenceName: "Spring sprint",
+        primaryLocale: "en-US",
+        badge: "CHALLENGE",
+        territorySchedules: [
+          {
+            territories: ["USA", "GBR"],
+            eventStart: "2027-03-01T00:00:00Z",
+            eventEnd: "2027-03-31T00:00:00Z",
+          },
+        ],
+      },
+      localization: {
+        locale: "en-US",
+        name: "Spring sprint",
+        shortDescription: "Run every day",
+      },
+      existingEvents: 4,
+    });
+  });
+
+  it("should create the event and its primary locale with --yes", async () => {
+    const { client, provider } = eventsClient();
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v1/appEvents", {
+      data: {
+        type: "appEvents",
+        attributes: {
+          referenceName: "Spring sprint",
+          primaryLocale: "en-US",
+          badge: "CHALLENGE",
+          territorySchedules: [
+            {
+              territories: ["USA", "GBR"],
+              eventStart: "2027-03-01T00:00:00Z",
+              eventEnd: "2027-03-31T00:00:00Z",
+            },
+          ],
+        },
+        relationships: { app: { data: { type: "apps", id: "123" } } },
+      },
+    });
+    expect(client.post).toHaveBeenCalledWith("/v1/appEventLocalizations", {
+      data: {
+        type: "appEventLocalizations",
+        attributes: {
+          locale: "en-US",
+          name: "Spring sprint",
+          shortDescription: "Run every day",
+        },
+        relationships: {
+          appEvent: { data: { type: "appEvents", id: "E2" } },
+        },
+      },
+    });
+    const output = JSON.parse(result.stdout);
+    expect(output.event).toMatchObject({ id: "E2", state: "DRAFT" });
+    expect(output.localization).toMatchObject({ id: "EL9", locale: "en-US" });
+  });
+
+  it("should say the event was created when its locale fails", async () => {
+    const { client, provider } = eventsClient();
+    const post = vi.mocked(client.post);
+    const create = post.getMockImplementation();
+    post.mockImplementation((path, body) =>
+      path === "/v1/appEventLocalizations"
+        ? Promise.reject(new AscApiError(409, {}))
+        : (create?.(path, body) as never),
+    );
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "In-app event E2 was created but its en-US name and descriptions were not saved",
+    );
+  });
+
+  it("should need a reference name, a locale, and valid territories and dates", async () => {
+    const { client, provider } = eventsClient();
+    for (const extra of [
+      ["--locale", "en-US"],
+      ["--reference-name", "X"],
+      ["--reference-name", "X", "--locale", "en-US", "--territories", "us"],
+      ["--reference-name", "X", "--locale", "en-US", "--event-start", "soon"],
+    ]) {
+      const result = await run(["events", "create", "123", ...extra], provider);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("[invalid_input]");
+    }
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("events set", () => {
+  it("should show the current and new values without --yes", async () => {
+    const { client, provider } = eventsClient();
+    const result = await run(
+      [
+        "events",
+        "set",
+        "E1",
+        "--locale",
+        "en-US",
+        "--long-description",
+        "Long",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "set",
+      event: EVENT_E1,
+      locale: "en-US",
+      newLocale: false,
+      current: { longDescription: null },
+      update: { longDescription: "Long" },
+      changes: true,
+    });
+  });
+
+  it("should update only the changed fields with --yes", async () => {
+    const { client, provider } = eventsClient();
+    const result = await run(
+      [
+        "events",
+        "set",
+        "E1",
+        "--locale",
+        "en-US",
+        "--name",
+        "Winter challenge",
+        "--long-description",
+        "Long",
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledWith("/v1/appEventLocalizations/EL1", {
+      data: {
+        type: "appEventLocalizations",
+        id: "EL1",
+        attributes: { longDescription: "Long" },
+      },
+    });
+    expect(JSON.parse(result.stdout).changed).toEqual(["longDescription"]);
+  });
+
+  it("should add a locale the event does not have with --yes", async () => {
+    const { client, provider } = eventsClient();
+    const result = await run(
+      ["events", "set", "E1", "--locale", "ja", "--name", "冬", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v1/appEventLocalizations", {
+      data: {
+        type: "appEventLocalizations",
+        attributes: { locale: "ja", name: "冬" },
+        relationships: {
+          appEvent: { data: { type: "appEvents", id: "E1" } },
+        },
+      },
+    });
+  });
+
+  it("should refuse an event in review", async () => {
+    const { client, provider } = eventsClient({ state: "IN_REVIEW" });
+    const result = await run(
+      ["events", "set", "E1", "--locale", "en-US", "--name", "X", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[invalid_input] In-app event Winter challenge is IN_REVIEW",
+    );
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should need a field to change", async () => {
+    const { provider } = eventsClient();
+    const result = await run(
+      ["events", "set", "E1", "--locale", "en-US"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("Give --name");
+  });
+});
+
+describe("events upload", () => {
+  async function folder(files: string[]) {
+    const dir = await mkdtemp(join(tmpdir(), "asc-events-"));
+    await mkdir(join(dir, "en-US"));
+    for (const file of files) {
+      await writeFile(
+        join(dir, "en-US", file),
+        file.endsWith(".png") ? png(1920, 1080) : "video",
+      );
+    }
+    return dir;
+  }
+
+  it("should place each file by the type and group in its name with --yes", async () => {
+    const { client, provider } = eventsClient();
+    const dir = await folder([
+      "EVENT_CARD_ASSET.png",
+      "EVENT_DETAILS_PAGE_ASSET-EVENT_DETAILS_IPHONE.mp4",
+    ]);
+    const dry = await run(
+      ["events", "upload", "123", "E1", "--dir", dir],
+      provider,
+    );
+    expect(dry.exitCode).toBe(0);
+    expect(client.post).not.toHaveBeenCalled();
+    expect(JSON.parse(dry.stdout).files).toEqual([
+      {
+        locale: "en-US",
+        file: "EVENT_CARD_ASSET.png",
+        placementType: "EVENT_CARD_ASSET",
+        placementGroup: EVENT_CARD,
+        fileSize: 33,
+      },
+      {
+        locale: "en-US",
+        file: "EVENT_DETAILS_PAGE_ASSET-EVENT_DETAILS_IPHONE.mp4",
+        placementType: "EVENT_DETAILS_PAGE_ASSET",
+        placementGroup: "EVENT_DETAILS_IPHONE",
+        fileSize: 5,
+      },
+    ]);
+    vi.mocked(console.log).mockClear();
+    const result = await run(
+      ["events", "upload", "123", "E1", "--dir", dir, "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v1/appAssetLibraryImages", {
+      data: {
+        type: "appAssetLibraryImages",
+        attributes: {
+          fileName: "EVENT_CARD_ASSET.png",
+          fileSize: 33,
+          category: "CREATIVE_ASSETS",
+        },
+        relationships: {
+          assetLibrary: { data: { type: "appAssetLibraries", id: "L1" } },
+        },
+      },
+    });
+    expect(client.post).toHaveBeenCalledWith("/v1/appAssetLibraryPlacements", {
+      data: {
+        type: "appAssetLibraryPlacements",
+        attributes: {
+          placementType: "EVENT_DETAILS_PAGE_ASSET",
+          placementGroup: "EVENT_DETAILS_IPHONE",
+        },
+        relationships: {
+          video: { data: { type: "appAssetLibraryVideos", id: "A2" } },
+          appEventLocalization: {
+            data: { type: "appEventLocalizations", id: "EL1" },
+          },
+        },
+      },
+    });
+  });
+
+  it("should place a file without a group when Apple lists none for its type", async () => {
+    const { client, provider } = eventsClient();
+    const eventsGet = vi.mocked(client.get).getMockImplementation();
+    vi.mocked(client.get).mockImplementation((path, query) =>
+      path === "/v1/appAssetLibraryRefData"
+        ? (Promise.resolve({
+            data: [
+              {
+                type: "appAssetLibraryRefData",
+                id: "1",
+                attributes: {
+                  imageSpecs: [],
+                  placementTypes: [
+                    { placementTypeId: "EVENT_CARD_ASSET", specMappings: [] },
+                  ],
+                },
+              },
+            ],
+          }) as never)
+        : (eventsGet?.(path, query) as never),
+    );
+    const result = await run(
+      [
+        "events",
+        "upload",
+        "123",
+        "E1",
+        "--dir",
+        await folder(["EVENT_CARD_ASSET.png", "EVENT_CARD_ASSET.mp4"]),
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v1/appAssetLibraryPlacements", {
+      data: {
+        type: "appAssetLibraryPlacements",
+        attributes: { placementType: "EVENT_CARD_ASSET" },
+        relationships: {
+          image: { data: { type: "appAssetLibraryImages", id: "A2" } },
+          appEventLocalization: {
+            data: { type: "appEventLocalizations", id: "EL1" },
+          },
+        },
+      },
+    });
+  });
+
+  it("should stop before writing on a file it cannot place", async () => {
+    const cases: [string, string][] = [
+      ["card.png", "EVENT_CARD_ASSET or EVENT_DETAILS_PAGE_ASSET"],
+      [
+        "EVENT_DETAILS_PAGE_ASSET.mp4",
+        "EVENT_DETAILS_IPHONE, EVENT_DETAILS_IPAD",
+      ],
+    ];
+    for (const [file, message] of cases) {
+      const { client, provider } = eventsClient();
+      const result = await run(
+        [
+          "events",
+          "upload",
+          "123",
+          "E1",
+          "--dir",
+          await folder([file]),
+          "--yes",
+        ],
+        provider,
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(message);
+      expect(client.post).not.toHaveBeenCalled();
+    }
+  });
+
+  it("should stop when the event already has its one card", async () => {
+    const { client, provider } = eventsClient({ cardPlaced: true });
+    const result = await run(
+      [
+        "events",
+        "upload",
+        "123",
+        "E1",
+        "--dir",
+        await folder(["EVENT_CARD_ASSET.png"]),
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("limit of 1");
+    expect(client.post).not.toHaveBeenCalled();
+  });
+
+  it("should report an event that is not the app's", async () => {
+    const { client, provider } = eventsClient();
+    const result = await run(
+      ["events", "upload", "123", "E7", "--dir", "/nonexistent", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[not_found] App 123 has no in-app event E7",
+    );
+    expect(client.post).not.toHaveBeenCalled();
+  });
+});
+
+describe("events submit", () => {
+  it("should show the event, submission and events past review without --yes", async () => {
+    const { client, provider } = eventsClient();
+    const result = await run(["events", "submit", "123", "E1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.post).not.toHaveBeenCalled();
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/apps/123/appEvents",
+      expect.objectContaining({
+        "filter[eventState]": ["ACCEPTED", "APPROVED", "PUBLISHED"],
+      }),
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "submit",
+      event: EVENT_E1,
+      platform: "IOS",
+      reviewSubmissionId: null,
+      eventsPastReview: 4,
+    });
+  });
+
+  it("should add the event to a new submission and submit it with --yes", async () => {
+    const { client, provider } = eventsClient();
+    const result = await run(
+      ["events", "submit", "123", "E1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v1/reviewSubmissionItems", {
+      data: {
+        type: "reviewSubmissionItems",
+        relationships: {
+          reviewSubmission: { data: { type: "reviewSubmissions", id: "RS9" } },
+          appEvent: { data: { type: "appEvents", id: "E1" } },
+        },
+      },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "submit",
+      eventId: "E1",
+      reviewSubmissionId: "RS9",
+      state: "WAITING_FOR_REVIEW",
+    });
+  });
+
+  it("should explain a refused submission, such as Apple's limit on events", async () => {
+    const { client, provider } = eventsClient();
+    vi.mocked(client.patch).mockRejectedValue(
+      new AscApiError(409, {
+        errors: [{ code: "STATE_ERROR", detail: "Too many events." }],
+      }),
+    );
+    const result = await run(
+      ["events", "submit", "123", "E1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(result.stderr).toContain("Apple's limit of events at once");
+    expect(result.stderr).toContain("Too many events.");
+  });
+
+  it("should refuse an event that is already published", async () => {
+    const { client, provider } = eventsClient({ state: "PUBLISHED" });
+    const result = await run(
+      ["events", "submit", "123", "E1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("is PUBLISHED, so it cannot be submitted");
+    expect(client.post).not.toHaveBeenCalled();
+  });
+});
