@@ -1282,12 +1282,13 @@ describe("builds compliance", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ changed: false });
   });
 
-  it("should require an answer", async () => {
+  it("should require an answer, even with --yes", async () => {
     const { client, provider } = writable(null);
-    const result = await run(["builds", "compliance", "B1"], provider);
+    const result = await run(["builds", "compliance", "B1", "--yes"], provider);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("Give --no-encryption or --encryption.");
     expect(client.get).not.toHaveBeenCalled();
+    expect(client.patch).not.toHaveBeenCalled();
   });
 
   it("should reject a build id that is not one path segment", async () => {
