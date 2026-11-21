@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { Command, Option } from "commander";
 import * as z from "zod";
 import pkg from "../package.json" with { type: "json" };
@@ -11,6 +12,12 @@ import {
   waitForBuild,
   waitInput,
 } from "./commands/builds.ts";
+import {
+  deleteReplyInput,
+  deleteReviewReply,
+  replyInput,
+  replyToReview,
+} from "./commands/review-replies.ts";
 import { listReviews, reviewsInput } from "./commands/reviews.ts";
 import { getStatus, statusInput } from "./commands/status.ts";
 import { listVersions, versionsInput } from "./commands/versions.ts";
@@ -27,12 +34,50 @@ const CURSOR = [
   "--cursor <cursor>",
   "read the next page: the nextCursor value from the previous result",
 ] as const;
+const YES = [
+  "--yes",
+  "do it; without --yes the command only prints what it would change",
+] as const;
+
+/** Where a command writes progress and notes: stderr, or what tests capture. */
+function stderr(command: Command): (text: string) => void {
+  return (
+    command.configureOutput().writeErr ??
+    ((text: string) => process.stderr.write(text))
+  );
+}
+
+/** The reply text from --body or the file named by --body-file. */
+async function readBody(
+  command: Command,
+  options: { body?: string; bodyFile?: string },
+): Promise<string> {
+  if (options.body !== undefined && options.bodyFile !== undefined) {
+    return command.error(
+      "[invalid_input] Give --body or --body-file, not both.",
+    );
+  }
+  if (options.body !== undefined) return options.body;
+  if (options.bodyFile === undefined) {
+    return command.error(
+      "[invalid_input] Give the reply text with --body or --body-file.",
+    );
+  }
+  try {
+    return await readFile(options.bodyFile, "utf8");
+  } catch {
+    return command.error(
+      `[invalid_input] Could not read the --body-file ${options.bodyFile}.`,
+    );
+  }
+}
 
 /** Clock and sleep for `builds wait`; tests pass fakes. */
 export type ProgramOptions = Partial<Pick<WaitDependencies, "sleep" | "now">>;
 
 /**
- * The command-line program: read-only App Store Connect queries. Results are
+ * The command-line program: App Store Connect queries, and write commands
+ * that change nothing without --yes. Results are
  * JSON on stdout; errors go to stderr and exit with code 1.
  */
 export function createProgram(
@@ -45,7 +90,7 @@ export function createProgram(
   const program = new Command()
     .name("asc")
     .description(
-      "Read-only App Store Connect queries with your own API key: apps, versions, builds and customer reviews.",
+      "App Store Connect with your own API key: apps, versions, builds, release status and customer reviews. Commands that change anything only print what they would do unless given --yes.",
     )
     .version(pkg.version)
     .option("--key-id <id>", "API key ID (default: ASC_KEY_ID)")
@@ -57,6 +102,27 @@ export function createProgram(
       "--private-key <path>",
       "path to the key's .p8 file (default: ASC_PRIVATE_KEY_PATH)",
     );
+
+  /**
+   * Runs a write command: without --yes its result is a dry run (`dryRun: true`)
+   * that changes nothing, and a note on stderr says so.
+   */
+  async function runWrite<Schema extends z.ZodType>(
+    command: Command,
+    schema: Schema,
+    input: unknown,
+    execute: (
+      client: AscClient,
+      input: z.output<Schema>,
+    ) => Promise<{ dryRun: boolean }>,
+  ): Promise<void> {
+    const result = await run(command, schema, input, execute);
+    if (result.dryRun) {
+      stderr(command)(
+        "Dry run: nothing was changed. Run the same command with --yes to do it.\n",
+      );
+    }
+  }
 
   /** Validates the input, runs the query, prints its result and returns it. */
   async function run<Schema extends z.ZodType, Result>(
@@ -163,9 +229,7 @@ export function createProgram(
       "30",
     )
     .action(async (appId: string, options, command: Command) => {
-      const writeErr =
-        command.configureOutput().writeErr ??
-        ((text: string) => process.stderr.write(text));
+      const writeErr = stderr(command);
       const build = await run(
         command,
         waitInput,
@@ -185,7 +249,7 @@ export function createProgram(
       }
     });
 
-  program
+  const reviews = program
     .command("reviews")
     .description(
       "Customer reviews of an app: rating, title, body, reviewer nickname, date, territory and your developer response if any.",
@@ -213,6 +277,41 @@ export function createProgram(
     .option(...CURSOR)
     .action(async (appId: string, options, command: Command) => {
       await run(command, reviewsInput, { appId, ...options }, listReviews);
+    });
+
+  reviews
+    .command("reply")
+    .description(
+      "Post a public developer response to a review, replacing your existing one. Without --yes, prints the review and the reply it would post. Needs a key with the App Manager or Customer Support role.",
+    )
+    .argument("<review-id>", "review id from the reviews command")
+    .option("--body <text>", "the reply text")
+    .option("--body-file <path>", "read the reply text from this file")
+    .option(...YES)
+    .action(async (reviewId: string, options, command: Command) => {
+      const body = await readBody(command, options);
+      await runWrite(
+        command,
+        replyInput,
+        { reviewId, body, yes: options.yes },
+        replyToReview,
+      );
+    });
+
+  reviews
+    .command("delete-reply")
+    .description(
+      "Delete your developer response to a review. Without --yes, prints the review and the response it would delete.",
+    )
+    .argument("<review-id>", "review id from the reviews command")
+    .option(...YES)
+    .action(async (reviewId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        deleteReplyInput,
+        { reviewId, yes: options.yes },
+        deleteReviewReply,
+      );
     });
 
   program

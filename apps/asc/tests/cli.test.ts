@@ -1,3 +1,6 @@
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AscClient } from "../src/asc/client.ts";
@@ -8,9 +11,19 @@ import {
 } from "../src/cli.ts";
 import { AscApiError, CredentialsError } from "../src/utils/errors.ts";
 
+/** Write methods for read-only tests: any call fails the test. */
+function noWrites(): Pick<AscClient, "post" | "delete"> {
+  const fail = () => Promise.reject(new Error("unexpected write"));
+  return {
+    post: vi.fn(fail) as AscClient["post"],
+    delete: vi.fn(fail) as AscClient["delete"],
+  };
+}
+
 /** A spied provider and client whose `get` resolves the given body. */
 function respond(body: unknown) {
   const client: AscClient = {
+    ...noWrites(),
     get: vi.fn(() => Promise.resolve(body)) as AscClient["get"],
   };
   const provider = vi.fn<AscClientProvider>(() => client);
@@ -468,6 +481,7 @@ describe("errors", () => {
     "should exit with 1 and a classified error from %s",
     async (...args) => {
       const provider: AscClientProvider = () => ({
+        ...noWrites(),
         get: () =>
           Promise.reject(
             new AscApiError(404, {
@@ -554,6 +568,7 @@ describe("builds wait", () => {
   function sequence(...responses: unknown[]) {
     const queue = [...responses];
     const client: AscClient = {
+      ...noWrites(),
       get: vi.fn(() => {
         const next = queue.length > 1 ? queue.shift() : queue[0];
         return next instanceof Error
@@ -733,6 +748,7 @@ describe("status", () => {
   /** Answers the versions request, and builds per platform filter. */
   function router(buildsByPlatform: Record<string, unknown>) {
     const client: AscClient = {
+      ...noWrites(),
       get: vi.fn((path: string, query?: Record<string, unknown>) =>
         Promise.resolve(
           path === "/v1/builds"
@@ -882,5 +898,255 @@ describe("status", () => {
     );
     expect(result.exitCode).toBe(1);
     expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("reviews reply and delete-reply", () => {
+  /** One review, with a developer response when `responseId` is given. */
+  function reviewDocument(responseId?: string) {
+    return {
+      data: {
+        type: "customerReviews",
+        id: "R1",
+        attributes: {
+          rating: 1,
+          title: "Crashes",
+          body: "Crashes on launch",
+          reviewerNickname: "sam",
+          createdDate: "2026-11-01T00:00:00-07:00",
+          territory: "USA",
+        },
+        relationships: {
+          response: {
+            data: responseId
+              ? { type: "customerReviewResponses", id: responseId }
+              : null,
+          },
+        },
+      },
+      included: responseId
+        ? [
+            {
+              type: "customerReviewResponses",
+              id: responseId,
+              attributes: {
+                responseBody: "Old reply",
+                state: "PUBLISHED",
+                lastModifiedDate: "2026-11-02T00:00:00-07:00",
+              },
+            },
+          ]
+        : [],
+    };
+  }
+
+  /** A client that reads the review and records writes. */
+  function writable(responseId?: string, post?: () => Promise<unknown>) {
+    const client: AscClient = {
+      get: vi.fn(() =>
+        Promise.resolve(reviewDocument(responseId)),
+      ) as AscClient["get"],
+      post: vi.fn(
+        post ??
+          (() =>
+            Promise.resolve({
+              data: {
+                type: "customerReviewResponses",
+                id: "NEW1",
+                attributes: {
+                  responseBody: "Fixed in 1.2",
+                  state: "PENDING_PUBLISH",
+                  lastModifiedDate: "2026-11-21T00:00:00-08:00",
+                },
+              },
+            })),
+      ) as AscClient["post"],
+      delete: vi.fn(() => Promise.resolve()) as AscClient["delete"],
+    };
+    return { client, provider: vi.fn<AscClientProvider>(() => client) };
+  }
+
+  it("should only show the reply without --yes", async () => {
+    const { client, provider } = writable();
+    const result = await run(
+      ["reviews", "reply", "R1", "--body", "Fixed in 1.2"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/customerReviews/R1",
+      expect.objectContaining({ include: "response" }),
+    );
+    expect(client.post).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "reply",
+      review: expect.objectContaining({ id: "R1", rating: 1 }),
+      replaces: false,
+      responseBody: "Fixed in 1.2",
+    });
+    expect(result.stderr).toContain("Dry run: nothing was changed");
+  });
+
+  it("should post the reply with --yes", async () => {
+    const { client, provider } = writable();
+    const result = await run(
+      ["reviews", "reply", "R1", "--body", "Fixed in 1.2", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v1/customerReviewResponses", {
+      data: {
+        type: "customerReviewResponses",
+        attributes: { responseBody: "Fixed in 1.2" },
+        relationships: {
+          review: { data: { type: "customerReviews", id: "R1" } },
+        },
+      },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "reply",
+      reviewId: "R1",
+      replaced: false,
+      response: {
+        id: "NEW1",
+        responseBody: "Fixed in 1.2",
+        state: "PENDING_PUBLISH",
+        lastModifiedDate: "2026-11-21T00:00:00-08:00",
+      },
+    });
+    expect(result.stderr).not.toContain("Dry run");
+  });
+
+  it("should say when a reply replaces the existing one", async () => {
+    const dry = writable("OLD1");
+    const preview = await run(
+      ["reviews", "reply", "R1", "--body", "New"],
+      dry.provider,
+    );
+    const shown = JSON.parse(preview.stdout);
+    expect(shown.replaces).toBe(true);
+    expect(shown.review.response.responseBody).toBe("Old reply");
+
+    vi.mocked(console.log).mockClear();
+    const real = writable("OLD1");
+    const posted = await run(
+      ["reviews", "reply", "R1", "--body", "New", "--yes"],
+      real.provider,
+    );
+    expect(JSON.parse(posted.stdout).replaced).toBe(true);
+  });
+
+  it("should read the reply from --body-file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "asc-reply-"));
+    const file = join(dir, "reply.txt");
+    await writeFile(file, "Thanks, fixed in 1.2\n");
+    const { client, provider } = writable();
+    const result = await run(
+      ["reviews", "reply", "R1", "--body-file", file, "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith(
+      "/v1/customerReviewResponses",
+      expect.objectContaining({
+        data: expect.objectContaining({
+          attributes: { responseBody: "Thanks, fixed in 1.2" },
+        }),
+      }),
+    );
+  });
+
+  it.each([
+    [["--body", "a", "--body-file", "x.txt"], "not both"],
+    [[], "--body or --body-file"],
+    [["--body", "   "], "The reply is empty"],
+    [["--body-file", "/no/such/file.txt"], "Could not read"],
+  ])("should refuse %j before any request", async (extra, message) => {
+    const { client, provider } = writable();
+    const result = await run(["reviews", "reply", "R1", ...extra], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(result.stderr).toContain(message);
+    expect(client.get).not.toHaveBeenCalled();
+    expect(client.post).not.toHaveBeenCalled();
+  });
+
+  it("should refuse a review id that is not one path segment", async () => {
+    const { client, provider } = writable();
+    const result = await run(
+      ["reviews", "reply", "../apps/1", "--body", "x", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+
+  it("should report a refused reply as [permission]", async () => {
+    const { provider } = writable(undefined, () =>
+      Promise.reject(new AscApiError(403, undefined)),
+    );
+    const result = await run(
+      ["reviews", "reply", "R1", "--body", "x", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("[permission]");
+  });
+
+  it("should only show the response to delete without --yes", async () => {
+    const { client, provider } = writable("OLD1");
+    const result = await run(["reviews", "delete-reply", "R1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.delete).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      dryRun: true,
+      action: "delete-reply",
+      review: { id: "R1", response: { responseBody: "Old reply" } },
+    });
+    expect(result.stderr).toContain("Dry run");
+  });
+
+  it("should delete the response by its own id with --yes", async () => {
+    const { client, provider } = writable("OLD1");
+    const result = await run(
+      ["reviews", "delete-reply", "R1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.delete).toHaveBeenCalledWith(
+      "/v1/customerReviewResponses/OLD1",
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "delete-reply",
+      reviewId: "R1",
+      deletedResponseId: "OLD1",
+    });
+  });
+
+  it("should fail as [not_found] when there is no response to delete", async () => {
+    const { client, provider } = writable();
+    const result = await run(
+      ["reviews", "delete-reply", "R1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[not_found]");
+    expect(result.stderr).toContain("no developer response");
+    expect(client.delete).not.toHaveBeenCalled();
+  });
+
+  it("should still list reviews for an app ID", async () => {
+    const { client, provider } = respond(empty);
+    const result = await run(["reviews", "1234567890"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/apps/1234567890/customerReviews",
+      expect.objectContaining({ include: "response" }),
+    );
   });
 });
