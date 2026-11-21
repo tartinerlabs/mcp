@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AscClient } from "../src/asc/client.ts";
+import type { AscClient, AscQuery } from "../src/asc/client.ts";
 import {
   type AscClientProvider,
   createProgram,
@@ -3319,5 +3319,666 @@ describe("screenshots delete", () => {
       action: "delete",
       deleted: ["P1"],
     });
+  });
+});
+
+/**
+ * Custom page CP1 of app 123 with version CV1 (en-US CL1, ja CL2), on top of
+ * the screenshots mock for the asset library and ref data.
+ */
+function customPagesClient({
+  versionState = "PREPARE_FOR_SUBMISSION",
+  drafts = [] as { id: string; items: Record<string, unknown>[] }[],
+} = {}) {
+  const base = screenshotsClient();
+  const baseGet = vi.mocked(base.client.get).getMockImplementation();
+  const localizations = [
+    {
+      type: "appCustomProductPageLocalizations",
+      id: "CL1",
+      attributes: { locale: "en-US", promotionalText: "Old text" },
+    },
+    {
+      type: "appCustomProductPageLocalizations",
+      id: "CL2",
+      attributes: { locale: "ja", promotionalText: null },
+    },
+  ];
+  const get = vi.fn((path: string, query: Record<string, unknown> = {}) => {
+    if (path === "/v1/apps/123/appCustomProductPages") {
+      return Promise.resolve({
+        data: [
+          {
+            type: "appCustomProductPages",
+            id: "CP1",
+            attributes: {
+              name: "Summer",
+              url: "https://apps.apple.com/app/id123?ppid=CP1",
+              visible: true,
+            },
+          },
+        ],
+        links: { self: "https://api.appstoreconnect.apple.com/v1/x" },
+        meta: { paging: { total: 1, limit: 50 } },
+      });
+    }
+    if (path === "/v1/appCustomProductPages/CP1") {
+      return Promise.resolve({
+        data: {
+          type: "appCustomProductPages",
+          id: "CP1",
+          attributes: query.include
+            ? undefined
+            : {
+                name: "Summer",
+                url: "https://apps.apple.com/app/id123?ppid=CP1",
+                visible: true,
+              },
+          relationships: query.include
+            ? { app: { data: { type: "apps", id: "123" } } }
+            : undefined,
+        },
+      });
+    }
+    if (path === "/v1/appCustomProductPages/CP1/appCustomProductPageVersions") {
+      return Promise.resolve({
+        data: [
+          {
+            type: "appCustomProductPageVersions",
+            id: "CV1",
+            attributes: {
+              version: "2",
+              state: versionState,
+              deepLink: "myapp://summer",
+            },
+          },
+        ],
+      });
+    }
+    if (path === "/v1/appCustomProductPageVersions/CV1") {
+      return Promise.resolve({
+        data: {
+          type: "appCustomProductPageVersions",
+          id: "CV1",
+          attributes: {
+            version: "2",
+            state: versionState,
+            deepLink: "myapp://summer",
+          },
+          relationships: {
+            appCustomProductPage: {
+              data: { type: "appCustomProductPages", id: "CP1" },
+            },
+          },
+        },
+        included: [
+          {
+            type: "appCustomProductPages",
+            id: "CP1",
+            attributes: { name: "Summer" },
+          },
+        ],
+      });
+    }
+    if (
+      path ===
+      "/v1/appCustomProductPageVersions/CV1/appCustomProductPageLocalizations"
+    ) {
+      const locale = query["filter[locale]"];
+      return Promise.resolve({
+        data: localizations.filter(
+          (item) => locale === undefined || item.attributes.locale === locale,
+        ),
+      });
+    }
+    if (path.startsWith("/v1/appCustomProductPageLocalizations/")) {
+      return Promise.resolve({ data: [] });
+    }
+    if (path === "/v1/reviewSubmissions") {
+      return Promise.resolve({
+        data: drafts.map(({ id }) => ({ type: "reviewSubmissions", id })),
+      });
+    }
+    const draft = drafts.find(
+      ({ id }) => path === `/v1/reviewSubmissions/${id}/items`,
+    );
+    if (draft) return Promise.resolve({ data: draft.items });
+    return baseGet?.(path, query as AscQuery) as never;
+  });
+  const basePost = vi.mocked(base.client.post).getMockImplementation();
+  const post = vi.fn((path: string, body: unknown) => {
+    if (path === "/v1/appCustomProductPages") {
+      return Promise.resolve({
+        data: {
+          type: "appCustomProductPages",
+          id: "CP2",
+          attributes: {
+            name: "Winter",
+            url: "https://apps.apple.com/app/id123?ppid=CP2",
+            visible: true,
+          },
+          relationships: {
+            appCustomProductPageVersions: {
+              data: [{ type: "appCustomProductPageVersions", id: "CV2" }],
+            },
+          },
+        },
+      });
+    }
+    if (path === "/v1/reviewSubmissions") {
+      return Promise.resolve({
+        data: { type: "reviewSubmissions", id: "RS9" },
+      });
+    }
+    if (path === "/v1/reviewSubmissionItems") {
+      return Promise.resolve({
+        data: { type: "reviewSubmissionItems", id: "RI1" },
+      });
+    }
+    return basePost?.(path, body) as never;
+  });
+  const patch = vi.fn((path: string) =>
+    Promise.resolve(
+      path.startsWith("/v1/reviewSubmissions/")
+        ? {
+            data: {
+              type: "reviewSubmissions",
+              id: path.split("/").pop(),
+              attributes: { state: "WAITING_FOR_REVIEW" },
+            },
+          }
+        : { data: {} },
+    ),
+  );
+  const client: AscClient = {
+    ...base.client,
+    get: get as AscClient["get"],
+    post: post as AscClient["post"],
+    patch: patch as AscClient["patch"],
+  };
+  return { client, provider: vi.fn<AscClientProvider>(() => client) };
+}
+
+describe("custom-pages", () => {
+  it("should list an app's pages, filtered by visibility", async () => {
+    const { client, provider } = customPagesClient();
+    const result = await run(["custom-pages", "123", "--no-visible"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/apps/123/appCustomProductPages",
+      expect.objectContaining({ "filter[visible]": "false", limit: 50 }),
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      pages: [
+        {
+          id: "CP1",
+          name: "Summer",
+          url: "https://apps.apple.com/app/id123?ppid=CP1",
+          visible: true,
+        },
+      ],
+      total: 1,
+      hasMore: false,
+    });
+  });
+
+  it("should show a page's versions and each locale's promotional text", async () => {
+    const { provider } = customPagesClient();
+    const result = await run(["custom-pages", "show", "CP1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      page: {
+        id: "CP1",
+        name: "Summer",
+        url: "https://apps.apple.com/app/id123?ppid=CP1",
+        visible: true,
+      },
+      versions: [
+        {
+          id: "CV1",
+          version: "2",
+          state: "PREPARE_FOR_SUBMISSION",
+          deepLink: "myapp://summer",
+          localizations: [
+            { id: "CL1", locale: "en-US", promotionalText: "Old text" },
+            { id: "CL2", locale: "ja", promotionalText: null },
+          ],
+        },
+      ],
+    });
+  });
+});
+
+// Apple's own local id form for resources created in the same request.
+// biome-ignore lint/suspicious/noTemplateCurlyInString: not a template.
+const NEW_VERSION = "${new-appCustomProductPageVersion-id}";
+// biome-ignore lint/suspicious/noTemplateCurlyInString: not a template.
+const NEW_LOCALIZATION = "${new-appCustomProductPageLocalization-id}";
+
+describe("custom-pages create", () => {
+  const args = [
+    "custom-pages",
+    "create",
+    "123",
+    "--name",
+    "Winter",
+    "--locale",
+    "en-US",
+    "--promotional-text",
+    "Snow sale",
+  ];
+
+  it("should show the page and how many the app has without --yes", async () => {
+    const { client, provider } = customPagesClient();
+    const result = await run(args, provider);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("Dry run");
+    expect(client.post).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "create",
+      appId: "123",
+      page: {
+        name: "Winter",
+        locale: "en-US",
+        promotionalText: "Snow sale",
+        deepLink: null,
+      },
+      existingPages: 1,
+    });
+  });
+
+  it("should create the page with its first version and locale with --yes", async () => {
+    const { client, provider } = customPagesClient();
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v1/appCustomProductPages", {
+      data: {
+        type: "appCustomProductPages",
+        attributes: { name: "Winter" },
+        relationships: {
+          app: { data: { type: "apps", id: "123" } },
+          appCustomProductPageVersions: {
+            data: [
+              {
+                type: "appCustomProductPageVersions",
+                id: NEW_VERSION,
+              },
+            ],
+          },
+        },
+      },
+      included: [
+        {
+          type: "appCustomProductPageVersions",
+          id: NEW_VERSION,
+          relationships: {
+            appCustomProductPageLocalizations: {
+              data: [
+                {
+                  type: "appCustomProductPageLocalizations",
+                  id: NEW_LOCALIZATION,
+                },
+              ],
+            },
+          },
+        },
+        {
+          type: "appCustomProductPageLocalizations",
+          id: NEW_LOCALIZATION,
+          attributes: { locale: "en-US", promotionalText: "Snow sale" },
+        },
+      ],
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "create",
+      page: {
+        id: "CP2",
+        name: "Winter",
+        url: "https://apps.apple.com/app/id123?ppid=CP2",
+        visible: true,
+      },
+      versionId: "CV2",
+    });
+  });
+
+  it("should report Apple's page limit as an error", async () => {
+    const { client, provider } = customPagesClient();
+    vi.mocked(client.post).mockRejectedValue(
+      new AscApiError(409, {
+        errors: [
+          {
+            code: "ENTITY_ERROR",
+            detail:
+              "You have reached the maximum number of custom product pages.",
+          },
+        ],
+      }),
+    );
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(result.stderr).toContain(
+      "App 123 may have reached Apple's limit of custom product pages",
+    );
+    expect(result.stderr).toContain("maximum number of custom product pages");
+  });
+
+  it("should require a name and a locale", async () => {
+    const { client, provider } = customPagesClient();
+    const result = await run(["custom-pages", "create", "123"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("--name");
+    expect(result.stderr).toContain("--locale");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("custom-pages set", () => {
+  const args = [
+    "custom-pages",
+    "set",
+    "CV1",
+    "--locale",
+    "en-US",
+    "--promotional-text",
+    "New text",
+    "--deep-link",
+    "myapp://winter",
+  ];
+
+  it("should show the current and new values without --yes", async () => {
+    const { client, provider } = customPagesClient();
+    const result = await run(args, provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "set",
+      version: {
+        id: "CV1",
+        version: "2",
+        state: "PREPARE_FOR_SUBMISSION",
+        deepLink: "myapp://summer",
+        pageId: "CP1",
+        page: "Summer",
+      },
+      locale: "en-US",
+      current: { deepLink: "myapp://summer", promotionalText: "Old text" },
+      update: { deepLink: "myapp://winter", promotionalText: "New text" },
+      changes: true,
+    });
+  });
+
+  it("should update the version's deep link and the locale's text with --yes", async () => {
+    const { client, provider } = customPagesClient();
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledWith(
+      "/v1/appCustomProductPageVersions/CV1",
+      {
+        data: {
+          type: "appCustomProductPageVersions",
+          id: "CV1",
+          attributes: { deepLink: "myapp://winter" },
+        },
+      },
+    );
+    expect(client.patch).toHaveBeenCalledWith(
+      "/v1/appCustomProductPageLocalizations/CL1",
+      {
+        data: {
+          type: "appCustomProductPageLocalizations",
+          id: "CL1",
+          attributes: { promotionalText: "New text" },
+        },
+      },
+    );
+    expect(JSON.parse(result.stdout).changed).toEqual([
+      "deepLink",
+      "promotionalText",
+    ]);
+  });
+
+  it("should refuse a page version in review", async () => {
+    const { client, provider } = customPagesClient({
+      versionState: "WAITING_FOR_REVIEW",
+    });
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[invalid_input] Version 2 of custom product page Summer is WAITING_FOR_REVIEW",
+    );
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should report a locale the page version does not have", async () => {
+    const { client, provider } = customPagesClient();
+    const result = await run(
+      [
+        "custom-pages",
+        "set",
+        "CV1",
+        "--locale",
+        "fr-FR",
+        "--promotional-text",
+        "x",
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[not_found]");
+    expect(result.stderr).toContain("no fr-FR localization");
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should need --locale for promotional text", async () => {
+    const { client, provider } = customPagesClient();
+    const result = await run(
+      ["custom-pages", "set", "CV1", "--promotional-text", "x"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("--locale");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("custom-pages upload", () => {
+  it("should place each file on the page's localization with --yes", async () => {
+    const { client, provider } = customPagesClient();
+    const dir = await mkdtemp(join(tmpdir(), "asc-custom-pages-"));
+    await mkdir(join(dir, "ja"));
+    await writeFile(join(dir, "ja", "1.png"), png(1290, 2796));
+    const dry = await run(
+      ["custom-pages", "upload", "CV1", "--dir", dir],
+      provider,
+    );
+    expect(dry.exitCode).toBe(0);
+    expect(client.post).not.toHaveBeenCalled();
+    expect(JSON.parse(dry.stdout).files).toEqual([
+      {
+        locale: "ja",
+        file: "1.png",
+        placementType: "APP_SCREENSHOT",
+        placementGroup: IPHONE,
+        fileSize: 33,
+      },
+    ]);
+    vi.mocked(console.log).mockClear();
+    const result = await run(
+      ["custom-pages", "upload", "CV1", "--dir", dir, "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/appCustomProductPageLocalizations/CL2/placements",
+      expect.anything(),
+    );
+    expect(client.post).toHaveBeenCalledWith("/v1/appAssetLibraryPlacements", {
+      data: {
+        type: "appAssetLibraryPlacements",
+        attributes: { placementType: "APP_SCREENSHOT", placementGroup: IPHONE },
+        relationships: {
+          image: { data: { type: "appAssetLibraryImages", id: "A1" } },
+          appCustomProductPageLocalization: {
+            data: { type: "appCustomProductPageLocalizations", id: "CL2" },
+          },
+        },
+      },
+    });
+    expect(JSON.parse(result.stdout).uploaded).toEqual([
+      expect.objectContaining({ assetId: "A1", placementId: "NP1" }),
+    ]);
+  });
+
+  it("should refuse a page version that is no longer editable", async () => {
+    const { client, provider } = customPagesClient({
+      versionState: "APPROVED",
+    });
+    const result = await run(
+      ["custom-pages", "upload", "CV1", "--dir", "/nonexistent", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.post).not.toHaveBeenCalled();
+  });
+});
+
+describe("custom-pages submit", () => {
+  it("should only show the version and submission without --yes", async () => {
+    const { client, provider } = customPagesClient();
+    const result = await run(["custom-pages", "submit", "CV1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.post).not.toHaveBeenCalled();
+    expect(client.patch).not.toHaveBeenCalled();
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/reviewSubmissions",
+      expect.objectContaining({
+        "filter[app]": "123",
+        "filter[platform]": "IOS",
+        "filter[state]": "READY_FOR_REVIEW",
+      }),
+    );
+    expect(JSON.parse(result.stdout)).toEqual(
+      expect.objectContaining({
+        dryRun: true,
+        action: "submit",
+        platform: "IOS",
+        reviewSubmissionId: null,
+      }),
+    );
+  });
+
+  it("should create a submission, add the version and submit it with --yes", async () => {
+    const { client, provider } = customPagesClient();
+    const result = await run(
+      ["custom-pages", "submit", "CV1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v1/reviewSubmissions", {
+      data: {
+        type: "reviewSubmissions",
+        attributes: { platform: "IOS" },
+        relationships: { app: { data: { type: "apps", id: "123" } } },
+      },
+    });
+    expect(client.post).toHaveBeenCalledWith("/v1/reviewSubmissionItems", {
+      data: {
+        type: "reviewSubmissionItems",
+        relationships: {
+          reviewSubmission: { data: { type: "reviewSubmissions", id: "RS9" } },
+          appCustomProductPageVersion: {
+            data: { type: "appCustomProductPageVersions", id: "CV1" },
+          },
+        },
+      },
+    });
+    expect(client.patch).toHaveBeenCalledWith("/v1/reviewSubmissions/RS9", {
+      data: {
+        type: "reviewSubmissions",
+        id: "RS9",
+        attributes: { submitted: true },
+      },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "submit",
+      versionId: "CV1",
+      reviewSubmissionId: "RS9",
+      state: "WAITING_FOR_REVIEW",
+    });
+  });
+
+  it("should reuse a draft submission that holds only this version", async () => {
+    const { client, provider } = customPagesClient({
+      versionState: "READY_FOR_REVIEW",
+      drafts: [
+        {
+          id: "RS1",
+          items: [
+            {
+              type: "reviewSubmissionItems",
+              id: "RI1",
+              relationships: {
+                appCustomProductPageVersion: {
+                  data: { type: "appCustomProductPageVersions", id: "CV1" },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const result = await run(
+      ["custom-pages", "submit", "CV1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).not.toHaveBeenCalled();
+    expect(client.patch).toHaveBeenCalledWith(
+      "/v1/reviewSubmissions/RS1",
+      expect.anything(),
+    );
+  });
+
+  it("should refuse a draft submission with other items", async () => {
+    const { client, provider } = customPagesClient({
+      drafts: [
+        {
+          id: "RS1",
+          items: [
+            {
+              type: "reviewSubmissionItems",
+              id: "RI1",
+              relationships: { appCustomProductPageVersion: { data: null } },
+            },
+          ],
+        },
+      ],
+    });
+    const result = await run(["custom-pages", "submit", "CV1"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[invalid_input] The app's IOS review submission RS1 is being prepared with 1 other item(s)",
+    );
+    expect(client.post).not.toHaveBeenCalled();
+  });
+
+  it("should refuse a page version that is already approved", async () => {
+    const { client, provider } = customPagesClient({
+      versionState: "APPROVED",
+    });
+    const result = await run(
+      ["custom-pages", "submit", "CV1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("is APPROVED, so it cannot be submitted");
+    expect(client.post).not.toHaveBeenCalled();
   });
 });

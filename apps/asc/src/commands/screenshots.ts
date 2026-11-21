@@ -80,15 +80,21 @@ function shapePlacement(
   };
 }
 
+/** Where placements go: an App Store version's localizations or a custom product page version's. */
+type LocalizationType =
+  | "appStoreVersionLocalizations"
+  | "appCustomProductPageLocalizations";
+
 /** A localization's screenshots and previews in display order. */
 async function listPlacements(
   client: AscClient,
   localizationId: string,
   placementGroup?: string,
+  localizationType: LocalizationType = "appStoreVersionLocalizations",
 ) {
   // Ten screenshots and three previews per group fit easily in one page.
   const response = await client.get<AscDocument<PlacementAttributes>>(
-    `/v1/appStoreVersionLocalizations/${localizationId}/placements`,
+    `/v1/${localizationType}/${localizationId}/placements`,
     {
       "filter[placementType]": PLACEMENT_TYPES,
       "filter[placementGroup]": placementGroup,
@@ -227,11 +233,15 @@ async function readRefData(client: AscClient) {
     attributes.placementTypes?.find((item) => item.placementTypeId === type)
       ?.specMappings ?? [];
   return {
-    /** How many of this type a version localization's group holds, if Apple says. */
-    maxCount: (type: PlacementType, group: string) =>
-      attributes.features
-        ?.find(({ featureId }) => featureId === "APP_STORE_VERSIONS")
-        ?.placementPolicies?.find(({ placementType }) => placementType === type)
+    /** How many of this type a localization's group holds under a feature, if Apple says. */
+    maxCount: (type: PlacementType, group: string, feature: string) =>
+      (
+        attributes.features?.find(({ featureId }) => featureId === feature) ??
+        attributes.features?.find(
+          ({ featureId }) => featureId === "APP_STORE_VERSIONS",
+        )
+      )?.placementPolicies
+        ?.find(({ placementType }) => placementType === type)
         ?.groupLimits?.find(({ groupIds }) => groupIds?.includes(group))
         ?.maxCount,
     groups: (type: PlacementType) =>
@@ -316,7 +326,26 @@ export const uploadInput = z.object({
   yes: z.boolean().default(false),
 });
 
-interface PlannedFile {
+/** The localizations an upload places files on, and how errors name them. */
+export interface UploadTarget {
+  localizationType: LocalizationType;
+  /** The placement's relationship to the localization. */
+  relationship:
+    | "appStoreVersionLocalization"
+    | "appCustomProductPageLocalization";
+  /**
+   * The ref data feature whose group limits apply; App Store versions' limits
+   * are used when Apple lists none for it.
+   */
+  feature: string;
+  /** Names the parent in errors, such as "Version 2.4". */
+  label: string;
+  /** The command that lists the parent's locales. */
+  localesCommand: string;
+  localizations: { id: string; locale: string }[];
+}
+
+export interface PlannedFile {
   locale: string;
   localizationId: string;
   file: string;
@@ -327,11 +356,10 @@ interface PlannedFile {
 }
 
 /** Reads the folder: one subfolder per locale, each file placed by the group in its name or its image size. */
-async function planUpload(
+export async function planUpload(
   client: AscClient,
   dir: string,
-  versionId: string,
-  versionLabel: string | undefined,
+  target: UploadTarget,
 ) {
   let folders: string[];
   try {
@@ -348,15 +376,12 @@ async function planUpload(
     );
   }
   const localizations = new Map(
-    (await listLocalizations(client, versionId)).map(({ id, locale }) => [
-      locale,
-      id,
-    ]),
+    target.localizations.map(({ id, locale }) => [locale, id]),
   );
   const missing = folders.filter((locale) => !localizations.has(locale));
   if (missing.length > 0) {
     throw new NotFoundError(
-      `Version ${versionLabel} has no ${missing.join(", ")} localization; the metadata command lists its locales.`,
+      `${target.label} has no ${missing.join(", ")} localization; the ${target.localesCommand} command lists its locales.`,
     );
   }
   const refData = await readRefData(client);
@@ -432,13 +457,19 @@ async function planUpload(
     const existing = await listPlacements(
       client,
       planned[0]?.localizationId ?? "",
+      undefined,
+      target.localizationType,
     );
     const checked = new Set<string>();
     for (const { placementType, placementGroup } of planned) {
       const key = `${placementType} ${placementGroup}`;
       if (checked.has(key)) continue;
       checked.add(key);
-      const max = refData.maxCount(placementType, placementGroup);
+      const max = refData.maxCount(
+        placementType,
+        placementGroup,
+        target.feature,
+      );
       const same = (item: {
         placementType?: string;
         placementGroup?: string;
@@ -449,7 +480,7 @@ async function planUpload(
       const adding = planned.filter(same).length;
       if (max !== undefined && there + adding > max) {
         throw new InvalidInputError(
-          `${locale} ${placementGroup} has ${there} ${placementType} and the folder adds ${adding}, past App Store Connect's limit of ${max}. Remove some with screenshots delete, or take files out of the folder.`,
+          `${locale} ${placementGroup} has ${there} ${placementType} and the folder adds ${adding}, past App Store Connect's limit of ${max}. ${target.localizationType === "appStoreVersionLocalizations" ? "Remove some with screenshots delete, or take files out of the folder." : "Take files out of the folder."}`,
         );
       }
     }
@@ -510,25 +541,9 @@ async function uploadAsset(
   return reserved.data.id;
 }
 
-/**
- * Uploads a folder of screenshots and app previews to a version: one
- * subfolder per locale, each file placed in the device group its name names
- * or, for a screenshot, the one its pixel size fits. Files are added after
- * those already there, in file name order. Without `yes`, shows where each
- * file would go.
- */
-export async function uploadScreenshots(
-  client: AscClient,
-  input: z.output<typeof uploadInput>,
-) {
-  const version = await editableVersion(client, input.versionId);
-  const { files, skipped } = await planUpload(
-    client,
-    input.dir,
-    input.versionId,
-    version.version,
-  );
-  const shown = files.map(
+/** What the dry run and the result say about each planned file. */
+export function showPlanned(files: PlannedFile[]) {
+  return files.map(
     ({ locale, file, placementType, placementGroup, fileSize }) => ({
       locale,
       file,
@@ -537,22 +552,19 @@ export async function uploadScreenshots(
       fileSize,
     }),
   );
-  if (!input.yes) {
-    return { dryRun: true, action: "upload", version, files: shown, skipped };
-  }
-  const { data: versionData } = await client.get<{ data: AscResource }>(
-    `/v1/appStoreVersions/${input.versionId}`,
-    { "fields[appStoreVersions]": ["app"], include: "app" },
-  );
-  const appId = versionData.relationships?.app?.data?.id;
-  if (!appId) {
-    throw new UnexpectedResponseError(
-      "App Store Connect did not say which app the version belongs to.",
-    );
-  }
+}
+
+/** Uploads each planned file to the app's asset library and places it on its localization, in order. */
+export async function placeFiles(
+  client: AscClient,
+  appId: string,
+  target: Pick<UploadTarget, "localizationType" | "relationship">,
+  files: PlannedFile[],
+) {
   const { data: library } = await client.get<{ data: AscResource }>(
     `/v1/apps/${appId}/assetLibrary`,
   );
+  const shown = showPlanned(files);
   const uploaded = [];
   for (const [index, file] of files.entries()) {
     try {
@@ -572,9 +584,9 @@ export async function uploadScreenshots(
             },
             relationships: {
               ...assetRelationship,
-              appStoreVersionLocalization: {
+              [target.relationship]: {
                 data: {
-                  type: "appStoreVersionLocalizations",
+                  type: target.localizationType,
                   id: file.localizationId,
                 },
               },
@@ -599,11 +611,54 @@ export async function uploadScreenshots(
       );
     }
   }
+  return uploaded;
+}
+
+/**
+ * Uploads a folder of screenshots and app previews to a version: one
+ * subfolder per locale, each file placed in the device group its name names
+ * or, for a screenshot, the one its pixel size fits. Files are added after
+ * those already there, in file name order. Without `yes`, shows where each
+ * file would go.
+ */
+export async function uploadScreenshots(
+  client: AscClient,
+  input: z.output<typeof uploadInput>,
+) {
+  const version = await editableVersion(client, input.versionId);
+  const target = {
+    localizationType: "appStoreVersionLocalizations",
+    relationship: "appStoreVersionLocalization",
+    feature: "APP_STORE_VERSIONS",
+    label: `Version ${version.version}`,
+    localesCommand: "metadata",
+    localizations: await listLocalizations(client, input.versionId),
+  } as const;
+  const { files, skipped } = await planUpload(client, input.dir, target);
+  if (!input.yes) {
+    return {
+      dryRun: true,
+      action: "upload",
+      version,
+      files: showPlanned(files),
+      skipped,
+    };
+  }
+  const { data: versionData } = await client.get<{ data: AscResource }>(
+    `/v1/appStoreVersions/${input.versionId}`,
+    { "fields[appStoreVersions]": ["app"], include: "app" },
+  );
+  const appId = versionData.relationships?.app?.data?.id;
+  if (!appId) {
+    throw new UnexpectedResponseError(
+      "App Store Connect did not say which app the version belongs to.",
+    );
+  }
   return {
     dryRun: false,
     action: "upload",
     versionId: input.versionId,
-    uploaded,
+    uploaded: await placeFiles(client, appId, target, files),
     skipped,
   };
 }

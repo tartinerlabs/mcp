@@ -21,6 +21,20 @@ import {
   waitInput,
 } from "./commands/builds.ts";
 import {
+  createCustomPage,
+  createCustomPageInput,
+  customPageInput,
+  customPagesInput,
+  getCustomPage,
+  listCustomPages,
+  setCustomPage,
+  setCustomPageInput,
+  submitCustomPage,
+  submitCustomPageInput,
+  uploadCustomPageInput,
+  uploadCustomPageScreenshots,
+} from "./commands/custom-pages.ts";
+import {
   getMetadata,
   metadataInput,
   setMetadata,
@@ -143,7 +157,7 @@ export function createProgram(
   const program = new Command()
     .name("asc")
     .description(
-      "App Store Connect with your own API key: apps, versions and their metadata, screenshots and app previews, app info, builds, release status, TestFlight groups, testers, feedback and notes, and customer reviews. Commands that change anything only print what they would do unless given --yes.",
+      "App Store Connect with your own API key: apps, versions and their metadata, screenshots and app previews, custom product pages, app info, builds, release status, TestFlight groups, testers, feedback and notes, and customer reviews. Commands that change anything only print what they would do unless given --yes.",
     )
     .version(pkg.version)
     .option("--key-id <id>", "API key ID (default: ASC_KEY_ID)")
@@ -395,6 +409,118 @@ export function createProgram(
         deleteInput,
         { placements, yes: options.yes },
         deleteScreenshots,
+      );
+    });
+
+  const customPages = program
+    .command("custom-pages")
+    .description(
+      "An app's custom product pages: id, name, App Store URL and whether it is visible. Commands that change anything need a key with the App Manager role.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option("--visible", "only visible pages")
+    .option("--no-visible", "only hidden pages")
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (appId: string, options, command: Command) => {
+      await run(
+        command,
+        customPagesInput,
+        { appId, ...options },
+        listCustomPages,
+      );
+    });
+
+  customPages
+    .command("show")
+    .description(
+      "One custom product page with each of its versions: version id, state, deep link, and each locale's promotional text.",
+    )
+    .argument("<page-id>", "page id from the custom-pages command")
+    .action(async (pageId: string, _options, command: Command) => {
+      await run(command, customPageInput, { pageId }, getCustomPage);
+    });
+
+  customPages
+    .command("create")
+    .description(
+      "Create a custom product page with its first version and one locale; add screenshots with custom-pages upload, then submit it. Apple limits how many pages an app has. Without --yes, prints the page and how many the app already has.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option("--name <name>", "the page's name in App Store Connect (required)")
+    .option(
+      "--locale <locale>",
+      "the page's first locale, such as en-US (required)",
+    )
+    .option("--promotional-text <text>", "that locale's promotional text")
+    .option("--deep-link <url>", "the URL the app opens from the page")
+    .option(...YES)
+    .action(async (appId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        createCustomPageInput,
+        { appId, ...options },
+        createCustomPage,
+      );
+    });
+
+  customPages
+    .command("set")
+    .description(
+      "Change a page version's deep link, or one locale's promotional text. Only a page version being prepared or rejected accepts changes. Without --yes, prints the current and new values.",
+    )
+    .argument("<page-version-id>", "version id from custom-pages show")
+    .option(
+      "--locale <locale>",
+      "the locale of --promotional-text, such as en-US",
+    )
+    .option("--promotional-text <text>", "the promotional text")
+    .option("--deep-link <url>", "the URL the app opens from the page")
+    .option(...YES)
+    .action(async (versionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setCustomPageInput,
+        { versionId, ...options },
+        setCustomPage,
+      );
+    });
+
+  customPages
+    .command("upload")
+    .description(
+      "Upload a folder of screenshots and app previews to a page version, as screenshots upload does for a version: one subfolder per locale, each file placed by the device group in its name or its pixel size. Only a page version being prepared or rejected accepts them. Without --yes, prints where each file would go.",
+    )
+    .argument("<page-version-id>", "version id from custom-pages show")
+    .option("--dir <folder>", "the folder of locale subfolders (required)")
+    .option(...YES)
+    .action(async (versionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        uploadCustomPageInput,
+        { versionId, ...options },
+        uploadCustomPageScreenshots,
+      );
+    });
+
+  customPages
+    .command("submit")
+    .description(
+      "Submit a page version for App Review on its own. Refuses when the app has a review submission being prepared with other items, which would go for review too. Without --yes, prints the version and the submission it would use.",
+    )
+    .argument("<page-version-id>", "version id from custom-pages show")
+    .addOption(
+      new Option("--platform <platform>", "the review submission's platform")
+        .choices([...PLATFORMS])
+        .default("IOS"),
+    )
+    .option(...YES)
+    .action(async (versionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        submitCustomPageInput,
+        { versionId, ...options },
+        submitCustomPage,
       );
     });
 
