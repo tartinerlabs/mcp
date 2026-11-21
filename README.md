@@ -240,9 +240,12 @@ node apps/index-now/dist/index.js submit https://example.com/new-page --key <key
 | --- | --- |
 | `apps` | Apps visible to the key: id, name, bundle ID, SKU and primary locale. |
 | `versions <app-id>` | An app's App Store versions, newest first, with their state and attached build number. |
-| `builds <app-id>` | An app's builds, newest upload first: build number, marketing version, processing state, expiry and the export compliance answer (`usesNonExemptEncryption`, `null` while unanswered). |
+| `builds <app-id>` | An app's builds, newest upload first: build number, marketing version, processing state, expiry and the export compliance answer (`usesNonExemptEncryption`, `null` while unanswered). `--group <group-id>` lists only the builds that TestFlight group can test. |
 | `builds wait <app-id> --build-number <n>` | Waits until that build finishes processing and prints it: exits 0 when it is `VALID`, 1 when it is `FAILED` or `INVALID`. Checks every 30 seconds (`--interval`) for up to 30 minutes (`--timeout`), with progress on stderr. A build not visible yet counts as still processing. |
 | `builds compliance <build-id> --no-encryption` | Answers a build's export compliance question, which TestFlight shows as "Missing Compliance" until it is answered: `--no-encryption` when the build uses no encryption or only exempt encryption such as HTTPS, `--encryption` when it uses non-exempt encryption (that also needs an encryption declaration in App Store Connect). |
+| `testflight groups <app-id>` | An app's TestFlight groups: internal or external (`--internal`, `--no-internal`), whether the group gets every build, and its feedback and public link settings. |
+| `testflight testers <app-id>` | An app's TestFlight testers, or one group's (`--group <group-id>`): name, email, how they were invited (`EMAIL` or `PUBLIC_LINK`, `--invite-type`) and their state, such as `INVITED`, `INSTALLED` or `REVOKED`. |
+| `testflight feedback <app-id> --type crash` | Feedback testers sent from TestFlight, newest first: crash reports (`--type crash`) or screenshot feedback (`--type screenshot`), with the comment, build, device and OS. `--build <build-id>` narrows it to one build. Tester emails are left out. |
 | `reviews <app-id>` | Customer reviews filtered by star rating, territory and whether a response exists, with your response. |
 | `reviews reply <review-id> --body <text>` | Posts a public developer response to a review (or `--body-file <path>`), replacing your existing one. Apple publishes it after a delay. |
 | `reviews delete-reply <review-id>` | Deletes your developer response to a review. |

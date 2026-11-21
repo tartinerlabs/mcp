@@ -531,6 +531,13 @@ describe.each([
   ["versions", ["1234567890"], "/v1/apps/1234567890/appStoreVersions"],
   ["builds", ["1234567890"], "/v1/builds"],
   ["reviews", ["1234567890"], "/v1/apps/1234567890/customerReviews"],
+  ["testflight groups", ["1234567890"], "/v1/betaGroups"],
+  ["testflight testers", ["1234567890"], "/v1/betaTesters"],
+  [
+    "testflight feedback",
+    ["1234567890", "--type", "crash"],
+    "/v1/apps/1234567890/betaFeedbackCrashSubmissions",
+  ],
 ])("%s --cursor", (command, args, path) => {
   it("should pass the cursor through and print the next one", async () => {
     const { client, provider } = respond({
@@ -540,7 +547,10 @@ describe.each([
         next: `https://api.appstoreconnect.apple.com${path}?cursor=NEXT`,
       },
     });
-    const result = await run([command, ...args, "--cursor", "AB"], provider);
+    const result = await run(
+      [...command.split(" "), ...args, "--cursor", "AB"],
+      provider,
+    );
     expect(result.exitCode).toBe(0);
     expect(client.get).toHaveBeenCalledWith(
       path,
@@ -1299,6 +1309,292 @@ describe("builds compliance", () => {
     );
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("[invalid_input]");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("builds --group", () => {
+  it("should filter builds by beta group", async () => {
+    const { client, provider } = respond(empty);
+    await run(["builds", "1", "--group", "G1"], provider);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/builds",
+      expect.objectContaining({
+        "filter[app]": "1",
+        "filter[betaGroups]": "G1",
+      }),
+    );
+  });
+
+  it("should leave the group filter out when not given", async () => {
+    const { client, provider } = respond(empty);
+    await run(["builds", "1"], provider);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/builds",
+      expect.objectContaining({ "filter[betaGroups]": undefined }),
+    );
+  });
+});
+
+describe("testflight groups", () => {
+  it("should list an app's groups by name and shape each one", async () => {
+    const { client, provider } = respond({
+      data: [
+        {
+          type: "betaGroups",
+          id: "G1",
+          attributes: {
+            name: "Friends",
+            createdDate: "2026-01-01T00:00:00.000Z",
+            isInternalGroup: false,
+            hasAccessToAllBuilds: null,
+            feedbackEnabled: true,
+            publicLinkEnabled: true,
+            publicLink: "https://testflight.apple.com/join/abc",
+            publicLinkLimitEnabled: true,
+            publicLinkLimit: 100,
+          },
+        },
+        {
+          type: "betaGroups",
+          id: "G2",
+          attributes: {
+            name: "Team",
+            isInternalGroup: true,
+            hasAccessToAllBuilds: true,
+            publicLinkLimitEnabled: null,
+            publicLinkLimit: null,
+          },
+        },
+      ],
+      links: { self: "x" },
+      meta: { paging: { total: 2 } },
+    });
+    const result = await run(
+      ["testflight", "groups", "1234567890", "--no-internal"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/betaGroups",
+      expect.objectContaining({
+        "filter[app]": "1234567890",
+        "filter[isInternalGroup]": false,
+        sort: "name",
+      }),
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      groups: [
+        {
+          id: "G1",
+          name: "Friends",
+          internal: false,
+          hasAccessToAllBuilds: null,
+          feedbackEnabled: true,
+          publicLinkEnabled: true,
+          publicLink: "https://testflight.apple.com/join/abc",
+          publicLinkLimit: 100,
+          createdDate: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          id: "G2",
+          name: "Team",
+          internal: true,
+          hasAccessToAllBuilds: true,
+          publicLinkLimit: null,
+        },
+      ],
+      total: 2,
+      hasMore: false,
+    });
+  });
+
+  it("should leave the internal filter out when not given", async () => {
+    const { client, provider } = respond(empty);
+    await run(["testflight", "groups", "1"], provider);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/betaGroups",
+      expect.objectContaining({ "filter[isInternalGroup]": undefined }),
+    );
+  });
+});
+
+describe("testflight testers", () => {
+  const testers = {
+    data: [
+      {
+        type: "betaTesters",
+        id: "T1",
+        attributes: {
+          firstName: "Sam",
+          lastName: "Lee",
+          email: "sam@example.com",
+          inviteType: "EMAIL",
+          state: "INSTALLED",
+        },
+      },
+    ],
+    links: { self: "x" },
+  };
+
+  it("should list an app's testers by last name", async () => {
+    const { client, provider } = respond(testers);
+    const result = await run(["testflight", "testers", "1234567890"], provider);
+    expect(result.exitCode).toBe(0);
+    const query = vi.mocked(client.get).mock.calls[0]?.[1];
+    expect(query).toMatchObject({
+      "filter[apps]": "1234567890",
+      sort: "lastName",
+    });
+    expect(query).not.toHaveProperty("filter[betaGroups]");
+    expect(JSON.parse(result.stdout).testers).toEqual([
+      {
+        id: "T1",
+        firstName: "Sam",
+        lastName: "Lee",
+        email: "sam@example.com",
+        inviteType: "EMAIL",
+        state: "INSTALLED",
+      },
+    ]);
+  });
+
+  it("should filter by group alone, since Apple allows one relationship filter", async () => {
+    const { client, provider } = respond(testers);
+    await run(
+      [
+        "testflight",
+        "testers",
+        "1",
+        "--group",
+        "G1",
+        "--invite-type",
+        "PUBLIC_LINK",
+      ],
+      provider,
+    );
+    const query = vi.mocked(client.get).mock.calls[0]?.[1];
+    expect(query).toMatchObject({
+      "filter[betaGroups]": "G1",
+      "filter[inviteType]": "PUBLIC_LINK",
+    });
+    expect(query).not.toHaveProperty("filter[apps]");
+  });
+
+  it("should refuse an unknown invite type", async () => {
+    const { client, provider } = respond(testers);
+    const result = await run(
+      ["testflight", "testers", "1", "--invite-type", "SMS"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("testflight feedback", () => {
+  function feedback(extra: Record<string, unknown> = {}) {
+    return {
+      data: [
+        {
+          type: "betaFeedbackCrashSubmissions",
+          id: "F1",
+          attributes: {
+            createdDate: "2026-10-23T07:42:28.683Z",
+            comment: "Crashed on launch",
+            email: "sam@example.com",
+            timeZone: "Asia/Singapore",
+            deviceModel: "iPhone16_2",
+            deviceFamily: "IPHONE",
+            devicePlatform: "IOS",
+            osVersion: "27.0.1",
+            appPlatform: "IOS",
+            locale: "en-SG",
+            architecture: "arm64e",
+            connectionType: "WIFI",
+            batteryPercentage: 80,
+            appUptimeInMilliseconds: null,
+            ...extra,
+          },
+          relationships: {
+            build: { data: { type: "builds", id: "B1" } },
+            tester: { data: { type: "betaTesters", id: "T1" } },
+          },
+        },
+      ],
+      included: [{ type: "builds", id: "B1", attributes: { version: "193" } }],
+      links: { self: "x" },
+    };
+  }
+
+  it("should list crash feedback newest first with its build and no email", async () => {
+    const { client, provider } = respond(feedback());
+    const result = await run(
+      [
+        "testflight",
+        "feedback",
+        "1234567890",
+        "--type",
+        "crash",
+        "--build",
+        "B1",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/apps/1234567890/betaFeedbackCrashSubmissions",
+      expect.objectContaining({
+        "filter[build]": "B1",
+        sort: "-createdDate",
+        include: "build",
+      }),
+    );
+    expect(JSON.parse(result.stdout).feedback).toEqual([
+      {
+        id: "F1",
+        type: "crash",
+        createdDate: "2026-10-23T07:42:28.683Z",
+        comment: "Crashed on launch",
+        build: { id: "B1", version: "193" },
+        deviceModel: "iPhone16_2",
+        deviceFamily: "IPHONE",
+        devicePlatform: "IOS",
+        osVersion: "27.0.1",
+        appPlatform: "IOS",
+        locale: "en-SG",
+        architecture: "arm64e",
+        connectionType: "WIFI",
+        batteryPercentage: 80,
+        appUptimeInMilliseconds: null,
+      },
+    ]);
+    expect(result.stdout).not.toContain("sam@example.com");
+    expect(result.stdout).not.toContain("Asia/Singapore");
+  });
+
+  it("should read screenshot feedback and keep its screenshots", async () => {
+    const screenshots = [{ url: "https://example.com/s.png", width: 1 }];
+    const { client, provider } = respond(feedback({ screenshots }));
+    const result = await run(
+      ["testflight", "feedback", "1", "--type", "screenshot"],
+      provider,
+    );
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/apps/1/betaFeedbackScreenshotSubmissions",
+      expect.anything(),
+    );
+    expect(JSON.parse(result.stdout).feedback[0]).toMatchObject({
+      type: "screenshot",
+      screenshots,
+    });
+  });
+
+  it("should require --type", async () => {
+    const { client, provider } = respond(feedback());
+    const result = await run(["testflight", "feedback", "1"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("Give --type crash or screenshot.");
     expect(client.get).not.toHaveBeenCalled();
   });
 });
