@@ -241,9 +241,10 @@ node apps/index-now/dist/index.js submit https://example.com/new-page --key <key
 | `apps` | Apps visible to the key: id, name, bundle ID, SKU and primary locale. |
 | `versions <app-id>` | An app's App Store versions, newest first, with their state and attached build number. |
 | `builds <app-id>` | An app's builds, newest upload first: build number, marketing version, processing state and expiry. |
+| `builds wait <app-id> --build-number <n>` | Waits until that build finishes processing and prints it: exits 0 when it is `VALID`, 1 when it is `FAILED` or `INVALID`. Checks every 30 seconds (`--interval`) for up to 30 minutes (`--timeout`), with progress on stderr. A build not visible yet counts as still processing. |
 | `reviews <app-id>` | Customer reviews filtered by star rating, territory and whether a response exists, with your response. |
 
-Each command returns one page (up to 200, `--limit`) and reports `hasMore`; when there is more, pass the result's `nextCursor` back as `--cursor` to read the next page. A 429 from Apple is reported as `[quota]` at once, without retrying. Run a command with `--help` for its filters.
+Each list command returns one page (up to 200, `--limit`) and reports `hasMore`; when there is more, pass the result's `nextCursor` back as `--cursor` to read the next page. A 429 from Apple is reported as `[quota]` at once, without retrying, except in `builds wait`, which backs off (1 minute, doubling up to 10) and keeps waiting. Run a command with `--help` for its filters.
 
 The key comes from options, or from environment variables when an option is not given. Nothing is stored: the `.p8` file is read on each run.
 

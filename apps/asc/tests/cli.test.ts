@@ -1,6 +1,11 @@
+import type { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AscClient } from "../src/asc/client.ts";
-import { type AscClientProvider, createProgram } from "../src/cli.ts";
+import {
+  type AscClientProvider,
+  createProgram,
+  type ProgramOptions,
+} from "../src/cli.ts";
 import { AscApiError, CredentialsError } from "../src/utils/errors.ts";
 
 /** A spied provider and client whose `get` resolves the given body. */
@@ -13,11 +18,19 @@ function respond(body: unknown) {
 }
 
 /** Runs the CLI, capturing stdout, stderr and the exit code. */
-async function run(args: string[], provider: AscClientProvider) {
+async function run(
+  args: string[],
+  provider: AscClientProvider,
+  options?: ProgramOptions,
+) {
   let stderr = "";
-  const program = createProgram(provider);
+  const program = createProgram(provider, options);
   // Subcommands inherit both settings when they are created, so set them on each.
-  for (const command of [program, ...program.commands]) {
+  const all = (command: Command): Command[] => [
+    command,
+    ...command.commands.flatMap(all),
+  ];
+  for (const command of all(program)) {
     command.exitOverride().configureOutput({
       writeErr: (text) => {
         stderr += text;
@@ -517,5 +530,151 @@ describe.each([
       hasMore: true,
       nextCursor: "NEXT",
     });
+  });
+});
+
+describe("builds wait", () => {
+  /** A builds page holding one build in the given state, or none. */
+  function page(processingState?: string) {
+    return {
+      data: processingState
+        ? [
+            {
+              type: "builds",
+              id: "b1",
+              attributes: { version: "42", processingState },
+            },
+          ]
+        : [],
+      links: { self: "x" },
+    };
+  }
+
+  /** A client answering each call with the next response; an Error is thrown. */
+  function sequence(...responses: unknown[]) {
+    const queue = [...responses];
+    const client: AscClient = {
+      get: vi.fn(() => {
+        const next = queue.length > 1 ? queue.shift() : queue[0];
+        return next instanceof Error
+          ? Promise.reject(next)
+          : Promise.resolve(next);
+      }) as AscClient["get"],
+    };
+    return { client, provider: vi.fn<AscClientProvider>(() => client) };
+  }
+
+  /** A fake clock that sleep advances, recording each delay. */
+  function clock() {
+    let time = 0;
+    const sleeps: number[] = [];
+    return {
+      sleeps,
+      options: {
+        now: () => time,
+        sleep: async (ms: number) => {
+          sleeps.push(ms);
+          time += ms;
+        },
+      } satisfies ProgramOptions,
+    };
+  }
+
+  const args = ["builds", "wait", "1234567890", "--build-number", "42"];
+
+  it("should poll until the build is VALID and print it", async () => {
+    const { client, provider } = sequence(
+      page(),
+      page("PROCESSING"),
+      page("VALID"),
+    );
+    const { sleeps, options } = clock();
+    const result = await run(args, provider, options);
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledTimes(3);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/builds",
+      expect.objectContaining({
+        "filter[app]": "1234567890",
+        "filter[version]": "42",
+        sort: "-uploadedDate",
+        limit: 1,
+      }),
+    );
+    expect(sleeps).toEqual([30_000, 30_000]);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      id: "b1",
+      version: "42",
+      processingState: "VALID",
+    });
+    expect(result.stderr).toContain("Build 42: not visible yet");
+    expect(result.stderr).toContain("Build 42: PROCESSING");
+  });
+
+  it("should print the build and exit 1 when processing fails", async () => {
+    const { provider } = sequence(page("INVALID"));
+    const result = await run(args, provider, clock().options);
+    expect(result.exitCode).toBe(1);
+    expect(JSON.parse(result.stdout).processingState).toBe("INVALID");
+    expect(result.stderr).toContain("finished processing as INVALID");
+  });
+
+  it("should back off on a rate limit instead of failing", async () => {
+    const { provider } = sequence(
+      new AscApiError(429, undefined),
+      new AscApiError(429, undefined),
+      page("VALID"),
+    );
+    const { sleeps, options } = clock();
+    const result = await run(args, provider, options);
+    expect(result.exitCode).toBe(0);
+    expect(sleeps).toEqual([60_000, 120_000]);
+    expect(result.stderr).toContain("Rate limited");
+  });
+
+  it("should give up after the timeout as [unavailable]", async () => {
+    const { client, provider } = sequence(page("PROCESSING"));
+    const { options } = clock();
+    const result = await run(
+      [...args, "--timeout", "1", "--interval", "20"],
+      provider,
+      options,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("[unavailable]");
+    expect(result.stderr).toContain("still processing after 1 minute;");
+    // Checks at 0s, 20s, 40s and 60s; a fifth at 80s would pass the deadline.
+    expect(client.get).toHaveBeenCalledTimes(4);
+  });
+
+  it("should fail at once on other errors", async () => {
+    const { client, provider } = sequence(new AscApiError(404, undefined));
+    const result = await run(args, provider, clock().options);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[not_found]");
+    expect(client.get).toHaveBeenCalledTimes(1);
+  });
+
+  it("should require --build-number", async () => {
+    const { client, provider } = sequence(page("VALID"));
+    const result = await run(
+      ["builds", "wait", "1234567890"],
+      provider,
+      clock().options,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(client.get).not.toHaveBeenCalled();
+  });
+
+  it("should still list builds for an app ID", async () => {
+    const { client, provider } = sequence(page("VALID"));
+    const result = await run(["builds", "1234567890"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout).builds).toHaveLength(1);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/builds",
+      expect.objectContaining({ limit: 50 }),
+    );
   });
 });
