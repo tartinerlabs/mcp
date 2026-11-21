@@ -8,6 +8,7 @@ import {
 import {
   appIdSchema,
   commaList,
+  cursorSchema,
   limitSchema,
   PLATFORMS,
 } from "../schemas/common.ts";
@@ -46,6 +47,7 @@ export const versionsInput = z.object({
   platform: z.enum(PLATFORMS).optional(),
   state: commaList(z.enum(APP_VERSION_STATES)),
   limit: limitSchema,
+  cursor: cursorSchema,
 });
 
 export async function listVersions(
@@ -70,6 +72,7 @@ export async function listVersions(
       ],
       "fields[builds]": "version",
       limit: input.limit,
+      cursor: input.cursor,
     },
   );
   const versions = response.data

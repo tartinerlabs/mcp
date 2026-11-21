@@ -1,6 +1,6 @@
 import * as z from "zod";
 import { type AscClient, type AscDocument, pageInfo } from "../asc/client.ts";
-import { limitSchema } from "../schemas/common.ts";
+import { cursorSchema, limitSchema } from "../schemas/common.ts";
 
 interface AppAttributes {
   name?: string;
@@ -16,6 +16,7 @@ export const appsInput = z.object({
     .enum(["name", "-name", "bundleId", "-bundleId", "sku", "-sku"])
     .default("name"),
   limit: limitSchema,
+  cursor: cursorSchema,
 });
 
 export async function listApps(
@@ -28,6 +29,7 @@ export async function listApps(
     sort: input.sort,
     "fields[apps]": ["name", "bundleId", "sku", "primaryLocale"],
     limit: input.limit,
+    cursor: input.cursor,
   });
   return {
     apps: response.data.map((app) => ({

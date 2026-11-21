@@ -113,14 +113,25 @@ export async function createAscClient(
   };
 }
 
-/** Paging summary for a single page; following `links.next` is not supported yet. */
+/** Paging summary for one page: pass `nextCursor` back as `--cursor` to read the next one. */
 export function pageInfo(document: AscDocument<unknown>): {
   total?: number;
   hasMore: boolean;
+  nextCursor?: string;
 } {
+  const next = document.links?.next;
+  let nextCursor: string | undefined;
+  try {
+    nextCursor = next
+      ? (new URL(next).searchParams.get("cursor") ?? undefined)
+      : undefined;
+  } catch {
+    nextCursor = undefined;
+  }
   return {
     total: document.meta?.paging?.total,
-    hasMore: document.links?.next !== undefined,
+    hasMore: next !== undefined,
+    nextCursor,
   };
 }
 

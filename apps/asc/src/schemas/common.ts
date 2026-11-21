@@ -34,6 +34,16 @@ export const appIdSchema = z
 
 export const limitSchema = z.coerce.number().int().min(1).max(200).default(50);
 
+/** The opaque `cursor` from a previous page's `nextCursor`; never a URL, so requests stay on Apple's host. */
+export const cursorSchema = z
+  .string()
+  .trim()
+  .regex(
+    /^[A-Za-z0-9_.~=+/-]{1,1000}$/,
+    "Must be the nextCursor value from a previous page.",
+  )
+  .optional();
+
 /** A comma-separated option value, such as `IN_REVIEW,REJECTED`. */
 export function commaList<T extends z.ZodType>(item: T) {
   return z.preprocess(

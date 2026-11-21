@@ -5,7 +5,12 @@ import {
   pageInfo,
   related,
 } from "../asc/client.ts";
-import { appIdSchema, commaList, limitSchema } from "../schemas/common.ts";
+import {
+  appIdSchema,
+  commaList,
+  cursorSchema,
+  limitSchema,
+} from "../schemas/common.ts";
 
 interface ReviewAttributes {
   rating?: number;
@@ -35,6 +40,7 @@ export const reviewsInput = z.object({
     .enum(["-createdDate", "createdDate", "-rating", "rating"])
     .default("-createdDate"),
   limit: limitSchema,
+  cursor: cursorSchema,
 });
 
 export async function listReviews(
@@ -64,6 +70,7 @@ export async function listReviews(
         "lastModifiedDate",
       ],
       limit: input.limit,
+      cursor: input.cursor,
     },
   );
   return {
