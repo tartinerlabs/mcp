@@ -1,3 +1,9 @@
+## [0.16.0](https://github.com/tartinerlabs/mcp/compare/v0.15.0...v0.16.0) (2026-11-21)
+
+### Features
+
+* **asc:** add builds wait command ([a4f8451](https://github.com/tartinerlabs/mcp/commit/a4f8451ca6d73be62666fdef3e20bbb3033f73f3))
+
 ## [0.15.0](https://github.com/tartinerlabs/mcp/compare/v0.14.1...v0.15.0) (2026-11-21)
 
 ### Features
