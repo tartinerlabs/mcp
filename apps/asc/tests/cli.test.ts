@@ -809,19 +809,17 @@ describe("status", () => {
   });
 
   it("should not report a version older than the live one as in progress", async () => {
-    versions.data.push(
-      version("v0", "IOS", "0.9.0", "DEVELOPER_REJECTED", "2025-12-01"),
-    );
-    try {
-      const { provider } = router({});
-      const result = await run(
-        ["status", "1234567890", "--platform", "IOS"],
-        provider,
-      );
-      expect(JSON.parse(result.stdout).platforms.IOS.inProgress.id).toBe("v3");
-    } finally {
-      versions.data.pop();
-    }
+    const { provider } = respond({
+      data: [
+        version("v0", "IOS", "0.9.0", "DEVELOPER_REJECTED", "2025-12-01"),
+        version("v2", "IOS", "1.1.0", "READY_FOR_DISTRIBUTION", "2026-02-01"),
+      ],
+      links: { self: "x" },
+    });
+    const result = await run(["status", "1234567890"], provider);
+    const { IOS } = JSON.parse(result.stdout).platforms;
+    expect(IOS.live.id).toBe("v2");
+    expect(IOS.inProgress).toBeNull();
   });
 
   it("should order versions by instant across UTC offsets", async () => {
