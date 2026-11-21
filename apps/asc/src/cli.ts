@@ -22,6 +22,15 @@ import {
 } from "./commands/review-replies.ts";
 import { listReviews, reviewsInput } from "./commands/reviews.ts";
 import { getStatus, statusInput } from "./commands/status.ts";
+import {
+  betaFeedbackInput,
+  betaGroupsInput,
+  betaTestersInput,
+  FEEDBACK_TYPES,
+  listBetaFeedback,
+  listBetaGroups,
+  listBetaTesters,
+} from "./commands/testflight.ts";
 import { listVersions, versionsInput } from "./commands/versions.ts";
 import { PLATFORMS } from "./schemas/common.ts";
 import { classifyError } from "./utils/errors.ts";
@@ -92,7 +101,7 @@ export function createProgram(
   const program = new Command()
     .name("asc")
     .description(
-      "App Store Connect with your own API key: apps, versions, builds, release status and customer reviews. Commands that change anything only print what they would do unless given --yes.",
+      "App Store Connect with your own API key: apps, versions, builds, release status, TestFlight groups, testers and feedback, and customer reviews. Commands that change anything only print what they would do unless given --yes.",
     )
     .version(pkg.version)
     .option("--key-id <id>", "API key ID (default: ASC_KEY_ID)")
@@ -208,6 +217,10 @@ export function createProgram(
       "--build-number <number>",
       "only builds with this build number (CFBundleVersion)",
     )
+    .option(
+      "--group <group-id>",
+      "only builds this TestFlight group can test (id from testflight groups)",
+    )
     .option(...(LIMIT as [string, string, string]))
     .option(...CURSOR)
     .action(async (appId: string, options, command: Command) => {
@@ -276,6 +289,85 @@ export function createProgram(
           yes: options.yes,
         },
         setBuildCompliance,
+      );
+    });
+
+  const testflight = program
+    .command("testflight")
+    .description(
+      "TestFlight: an app's beta groups, testers, and the feedback testers sent.",
+    );
+
+  testflight
+    .command("groups")
+    .description(
+      "An app's TestFlight groups by name: internal or external, whether it gets every build, feedback and public link settings. List a group's builds with builds --group and its testers with testflight testers --group.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option("--internal", "only internal groups")
+    .option("--no-internal", "only external groups")
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (appId: string, options, command: Command) => {
+      await run(
+        command,
+        betaGroupsInput,
+        { appId, ...options },
+        listBetaGroups,
+      );
+    });
+
+  testflight
+    .command("testers")
+    .description(
+      "An app's TestFlight testers by last name: name, email, how they were invited (EMAIL or PUBLIC_LINK) and their state, such as INVITED, ACCEPTED or INSTALLED.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option(
+      "--group <group-id>",
+      "only testers in this group (id from testflight groups)",
+    )
+    .addOption(
+      new Option(
+        "--invite-type <type>",
+        "only testers invited this way",
+      ).choices(["EMAIL", "PUBLIC_LINK"]),
+    )
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (appId: string, options, command: Command) => {
+      await run(
+        command,
+        betaTestersInput,
+        { appId, ...options },
+        listBetaTesters,
+      );
+    });
+
+  testflight
+    .command("feedback")
+    .description(
+      "Feedback TestFlight testers sent, newest first: their comment, the build, and the device, OS and platform. Tester emails are left out.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .addOption(
+      new Option(
+        "--type <type>",
+        "crash reports or screenshot feedback (required)",
+      ).choices([...FEEDBACK_TYPES]),
+    )
+    .option(
+      "--build <build-id>",
+      "only feedback from this build (id from builds)",
+    )
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (appId: string, options, command: Command) => {
+      await run(
+        command,
+        betaFeedbackInput,
+        { appId, ...options },
+        listBetaFeedback,
       );
     });
 

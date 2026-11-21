@@ -43,6 +43,14 @@ export const buildsInput = z.object({
   ),
   expired: z.boolean().optional(),
   buildNumber: buildNumberSchema.optional(),
+  group: z
+    .string()
+    .trim()
+    .regex(
+      /^[A-Za-z0-9-]{1,100}$/,
+      "Must be an id from the testflight groups command.",
+    )
+    .optional(),
   limit: limitSchema,
   cursor: cursorSchema,
 });
@@ -108,6 +116,7 @@ export async function listBuilds(
     ...buildsQuery(input.appId, input.buildNumber),
     "filter[processingState]": input.processingState,
     "filter[expired]": input.expired,
+    "filter[betaGroups]": input.group,
     limit: input.limit,
     cursor: input.cursor,
   });
