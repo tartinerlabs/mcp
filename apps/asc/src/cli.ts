@@ -4,6 +4,12 @@ import * as z from "zod";
 import pkg from "../package.json" with { type: "json" };
 import type { AscClient } from "./asc/client.ts";
 import type { CredentialOptions } from "./asc/credentials.ts";
+import {
+  appInfoInput,
+  getAppInfo,
+  setAppInfo,
+  setAppInfoInput,
+} from "./commands/app-info.ts";
 import { appsInput, listApps } from "./commands/apps.ts";
 import {
   buildsInput,
@@ -14,6 +20,12 @@ import {
   waitForBuild,
   waitInput,
 } from "./commands/builds.ts";
+import {
+  getMetadata,
+  metadataInput,
+  setMetadata,
+  setMetadataInput,
+} from "./commands/metadata.ts";
 import {
   deleteReplyInput,
   deleteReviewReply,
@@ -121,7 +133,7 @@ export function createProgram(
   const program = new Command()
     .name("asc")
     .description(
-      "App Store Connect with your own API key: apps, versions, builds, release status, TestFlight groups, testers, feedback and notes, and customer reviews. Commands that change anything only print what they would do unless given --yes.",
+      "App Store Connect with your own API key: apps, versions and their metadata, app info, builds, release status, TestFlight groups, testers, feedback and notes, and customer reviews. Commands that change anything only print what they would do unless given --yes.",
     )
     .version(pkg.version)
     .option("--key-id <id>", "API key ID (default: ASC_KEY_ID)")
@@ -219,6 +231,77 @@ export function createProgram(
     .option(...CURSOR)
     .action(async (appId: string, options, command: Command) => {
       await run(command, versionsInput, { appId, ...options }, listVersions);
+    });
+
+  const metadata = program
+    .command("metadata")
+    .description(
+      "A version's App Store metadata in every locale: description, keywords, promotional text, What's New, support and marketing URLs.",
+    )
+    .argument("<version-id>", "version id from the versions command")
+    .action(async (versionId: string, _options, command: Command) => {
+      await run(command, metadataInput, { versionId }, getMetadata);
+    });
+
+  metadata
+    .command("set")
+    .description(
+      "Change a version's metadata for one locale. Only a version being prepared or rejected accepts changes, except --promotional-text, which can change at any time. Without --yes, prints the current and new values. Needs a key with the App Manager role.",
+    )
+    .argument("<version-id>", "version id from the versions command")
+    .option(
+      "--locale <locale>",
+      "the locale to change, such as en-US (required)",
+    )
+    .option("--description <text>", "the App Store description")
+    .option("--keywords <text>", "comma-separated search keywords")
+    .option("--promotional-text <text>", "the promotional text")
+    .option("--whats-new <text>", "What's New in this version")
+    .option("--support-url <url>", "the support URL")
+    .option("--marketing-url <url>", "the marketing URL")
+    .option(...YES)
+    .action(async (versionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setMetadataInput,
+        { versionId, ...options },
+        setMetadata,
+      );
+    });
+
+  const appInfo = program
+    .command("app-info")
+    .description(
+      "An app's app infos, usually the live one and one being prepared: state, age rating, category IDs, and each locale's name, subtitle and privacy policy links.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .action(async (appId: string, _options, command: Command) => {
+      await run(command, appInfoInput, { appId }, getAppInfo);
+    });
+
+  appInfo
+    .command("set")
+    .description(
+      "Change an app info for one locale. Only an app info being prepared or rejected accepts changes. Without --yes, prints the current and new values. Needs a key with the App Manager role.",
+    )
+    .argument("<app-info-id>", "app info id from the app-info command")
+    .option(
+      "--locale <locale>",
+      "the locale to change, such as en-US (required)",
+    )
+    .option("--name <text>", "the app's name on the App Store")
+    .option("--subtitle <text>", "the subtitle")
+    .option("--privacy-policy-url <url>", "the privacy policy URL")
+    .option("--privacy-choices-url <url>", "the privacy choices URL")
+    .option("--privacy-policy-text <text>", "the privacy policy text (tvOS)")
+    .option(...YES)
+    .action(async (appInfoId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setAppInfoInput,
+        { appInfoId, ...options },
+        setAppInfo,
+      );
     });
 
   const builds = program

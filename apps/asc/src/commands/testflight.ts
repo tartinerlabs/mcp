@@ -6,18 +6,12 @@ import {
   pageInfo,
   related,
 } from "../asc/client.ts";
-import { appIdSchema, cursorSchema, limitSchema } from "../schemas/common.ts";
-
-/** Group and build IDs are opaque; letters, digits and hyphens keep them to one value. */
-function idSchema(source: string) {
-  return z
-    .string()
-    .trim()
-    .regex(
-      /^[A-Za-z0-9-]{1,100}$/,
-      `Must be an id from the ${source} command.`,
-    );
-}
+import {
+  appIdSchema,
+  cursorSchema,
+  idSchema,
+  limitSchema,
+} from "../schemas/common.ts";
 
 export const groupIdSchema = idSchema("testflight groups");
 const buildIdSchema = idSchema("builds");

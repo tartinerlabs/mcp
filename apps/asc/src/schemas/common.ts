@@ -32,6 +32,26 @@ export const appIdSchema = z
   .trim()
   .regex(/^\d{1,20}$/, "Must be a numeric App Store Connect app ID.");
 
+/** A resource ID from another command's output; letters, digits and hyphens keep it to one path segment. */
+export function idSchema(source: string) {
+  return z
+    .string()
+    .trim()
+    .regex(
+      /^[A-Za-z0-9-]{1,100}$/,
+      `Must be an id from the ${source} command.`,
+    );
+}
+
+/** An App Store locale such as en-US or zh-Hans. */
+export const localeSchema = z
+  .string({ error: "Give the language with --locale, such as en-US." })
+  .trim()
+  .regex(
+    /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/,
+    "Must be a locale such as en-US or zh-Hans.",
+  );
+
 export const limitSchema = z.coerce.number().int().min(1).max(200).default(50);
 
 /** The opaque `cursor` from a previous page's `nextCursor`; never a URL, so requests stay on Apple's host. */

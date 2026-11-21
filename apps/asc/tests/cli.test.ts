@@ -2076,3 +2076,456 @@ describe("testflight notes", () => {
     expect(client.get).not.toHaveBeenCalled();
   });
 });
+
+/** A client for the metadata commands: `get` answers by path. */
+function metadataClient({
+  versionState = "PREPARE_FOR_SUBMISSION",
+  appInfoState = "PREPARE_FOR_SUBMISSION",
+}: {
+  versionState?: string;
+  appInfoState?: string;
+} = {}) {
+  const versionLocalization = {
+    type: "appStoreVersionLocalizations",
+    id: "VL1",
+    attributes: {
+      locale: "en-US",
+      description: "Old description",
+      keywords: "one,two",
+      promotionalText: null,
+      whatsNew: "Bug fixes",
+      supportUrl: "https://example.com/support",
+      marketingUrl: null,
+    },
+  };
+  const appInfoLocalization = {
+    type: "appInfoLocalizations",
+    id: "AL1",
+    attributes: {
+      locale: "en-US",
+      name: "Example",
+      subtitle: "Old subtitle",
+      privacyPolicyUrl: "https://example.com/privacy",
+      privacyChoicesUrl: null,
+      privacyPolicyText: null,
+    },
+  };
+  const byLocale = (item: { attributes: { locale: string } }, query = {}) => {
+    const locale = (query as Record<string, unknown>)["filter[locale]"];
+    return {
+      data:
+        locale === undefined || locale === item.attributes.locale ? [item] : [],
+    };
+  };
+  const get = vi.fn((path: string, query: Record<string, unknown> = {}) => {
+    if (path === "/v1/appStoreVersions/V1") {
+      return Promise.resolve({
+        data: {
+          type: "appStoreVersions",
+          id: "V1",
+          attributes: {
+            platform: "IOS",
+            versionString: "2.4",
+            appVersionState: versionState,
+          },
+        },
+      });
+    }
+    if (path === "/v1/appStoreVersions/V1/appStoreVersionLocalizations") {
+      return Promise.resolve(byLocale(versionLocalization, query));
+    }
+    if (path === "/v1/apps/123/appInfos") {
+      return Promise.resolve({
+        data: [
+          {
+            type: "appInfos",
+            id: "AI1",
+            attributes: { state: appInfoState, appStoreAgeRating: "FOUR_PLUS" },
+            relationships: {
+              primaryCategory: {
+                data: { type: "appCategories", id: "PRODUCTIVITY" },
+              },
+              secondaryCategory: { data: null },
+            },
+          },
+        ],
+        included: [{ type: "appCategories", id: "PRODUCTIVITY" }],
+      });
+    }
+    if (path === "/v1/appInfos/AI1") {
+      return Promise.resolve({
+        data: {
+          type: "appInfos",
+          id: "AI1",
+          attributes: { state: appInfoState },
+        },
+      });
+    }
+    if (path === "/v1/appInfos/AI1/appInfoLocalizations") {
+      return Promise.resolve(byLocale(appInfoLocalization, query));
+    }
+    return Promise.reject(new Error(`unexpected GET ${path}`));
+  });
+  const client: AscClient = {
+    get: get as AscClient["get"],
+    post: vi.fn(() => Promise.reject(new Error("unexpected POST"))),
+    patch: vi.fn(() => Promise.resolve({ data: {} })) as AscClient["patch"],
+    delete: vi.fn(() => Promise.reject(new Error("unexpected DELETE"))),
+  };
+  return { client, provider: vi.fn<AscClientProvider>(() => client) };
+}
+
+describe("metadata", () => {
+  it("should print the version and every locale's metadata", async () => {
+    const { client, provider } = metadataClient();
+    const result = await run(["metadata", "V1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/appStoreVersions/V1/appStoreVersionLocalizations",
+      expect.objectContaining({ limit: 200 }),
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      version: {
+        id: "V1",
+        version: "2.4",
+        platform: "IOS",
+        state: "PREPARE_FOR_SUBMISSION",
+      },
+      localizations: [
+        {
+          id: "VL1",
+          locale: "en-US",
+          description: "Old description",
+          keywords: "one,two",
+          promotionalText: null,
+          whatsNew: "Bug fixes",
+          supportUrl: "https://example.com/support",
+          marketingUrl: null,
+        },
+      ],
+    });
+  });
+
+  it("should reject an id that is not one path segment", async () => {
+    const { client, provider } = metadataClient();
+    const result = await run(["metadata", "../apps"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("metadata set", () => {
+  const args = [
+    "metadata",
+    "set",
+    "V1",
+    "--locale",
+    "en-US",
+    "--description",
+    "New description",
+    "--keywords",
+    "one,two",
+  ];
+
+  it("should show the current and new values without --yes", async () => {
+    const { client, provider } = metadataClient();
+    const result = await run(args, provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).not.toHaveBeenCalled();
+    expect(result.stderr).toContain("Dry run");
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "metadata",
+      version: {
+        id: "V1",
+        version: "2.4",
+        platform: "IOS",
+        state: "PREPARE_FOR_SUBMISSION",
+      },
+      locale: "en-US",
+      current: { description: "Old description", keywords: "one,two" },
+      update: { description: "New description", keywords: "one,two" },
+      changes: true,
+    });
+  });
+
+  it("should update only the changed fields with --yes", async () => {
+    const { client, provider } = metadataClient();
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledWith(
+      "/v1/appStoreVersionLocalizations/VL1",
+      {
+        data: {
+          type: "appStoreVersionLocalizations",
+          id: "VL1",
+          attributes: { description: "New description" },
+        },
+      },
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "metadata",
+      versionId: "V1",
+      locale: "en-US",
+      changed: ["description"],
+    });
+  });
+
+  it("should refuse a version that is no longer editable", async () => {
+    const { client, provider } = metadataClient({
+      versionState: "READY_FOR_DISTRIBUTION",
+    });
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[invalid_input] Version 2.4 is READY_FOR_DISTRIBUTION",
+    );
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should allow promotional text on a version that is live", async () => {
+    const { client, provider } = metadataClient({
+      versionState: "READY_FOR_DISTRIBUTION",
+    });
+    const result = await run(
+      [
+        "metadata",
+        "set",
+        "V1",
+        "--locale",
+        "en-US",
+        "--promotional-text",
+        "Now with widgets",
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledWith(
+      "/v1/appStoreVersionLocalizations/VL1",
+      expect.objectContaining({
+        data: expect.objectContaining({
+          attributes: { promotionalText: "Now with widgets" },
+        }),
+      }),
+    );
+  });
+
+  it("should report a locale the version does not have", async () => {
+    const { client, provider } = metadataClient();
+    const result = await run(
+      [
+        "metadata",
+        "set",
+        "V1",
+        "--locale",
+        "fr-FR",
+        "--whats-new",
+        "x",
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[not_found] Version 2.4 has no fr-FR metadata",
+    );
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should require a locale, a field and valid URLs", async () => {
+    const { client, provider } = metadataClient();
+    const noField = await run(
+      ["metadata", "set", "V1", "--locale", "en-US"],
+      provider,
+    );
+    expect(noField.exitCode).toBe(1);
+    expect(noField.stderr).toContain("Give at least one field to change");
+    const noLocale = await run(
+      ["metadata", "set", "V1", "--keywords", "a"],
+      provider,
+    );
+    expect(noLocale.exitCode).toBe(1);
+    expect(noLocale.stderr).toContain("--locale");
+    const badUrl = await run(
+      [
+        "metadata",
+        "set",
+        "V1",
+        "--locale",
+        "en-US",
+        "--support-url",
+        "javascript:alert(1)",
+      ],
+      provider,
+    );
+    expect(badUrl.exitCode).toBe(1);
+    expect(badUrl.stderr).toContain("[invalid_input]");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("app-info", () => {
+  it("should print each app info with its categories and locales", async () => {
+    const { client, provider } = metadataClient();
+    const result = await run(["app-info", "123"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/apps/123/appInfos",
+      expect.objectContaining({
+        include: expect.arrayContaining([
+          "primaryCategory",
+          "secondaryCategory",
+        ]),
+      }),
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      appInfos: [
+        {
+          id: "AI1",
+          state: "PREPARE_FOR_SUBMISSION",
+          appStoreAgeRating: "FOUR_PLUS",
+          categories: {
+            primaryCategory: "PRODUCTIVITY",
+            primarySubcategoryOne: null,
+            primarySubcategoryTwo: null,
+            secondaryCategory: null,
+            secondarySubcategoryOne: null,
+            secondarySubcategoryTwo: null,
+          },
+          localizations: [
+            {
+              id: "AL1",
+              locale: "en-US",
+              name: "Example",
+              subtitle: "Old subtitle",
+              privacyPolicyUrl: "https://example.com/privacy",
+              privacyChoicesUrl: null,
+              privacyPolicyText: null,
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("should reject an app ID that is not numeric", async () => {
+    const { client, provider } = metadataClient();
+    const result = await run(["app-info", "abc"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("app-info set", () => {
+  const args = [
+    "app-info",
+    "set",
+    "AI1",
+    "--locale",
+    "en-US",
+    "--subtitle",
+    "New subtitle",
+  ];
+
+  it("should show the current and new values without --yes", async () => {
+    const { client, provider } = metadataClient();
+    const result = await run(args, provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "app-info",
+      appInfo: { id: "AI1", state: "PREPARE_FOR_SUBMISSION" },
+      locale: "en-US",
+      current: { subtitle: "Old subtitle" },
+      update: { subtitle: "New subtitle" },
+      changes: true,
+    });
+  });
+
+  it("should update the locale with --yes", async () => {
+    const { client, provider } = metadataClient();
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledWith("/v1/appInfoLocalizations/AL1", {
+      data: {
+        type: "appInfoLocalizations",
+        id: "AL1",
+        attributes: { subtitle: "New subtitle" },
+      },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "app-info",
+      appInfoId: "AI1",
+      locale: "en-US",
+      changed: ["subtitle"],
+    });
+  });
+
+  it("should refuse an app info that is no longer editable", async () => {
+    const { client, provider } = metadataClient({
+      appInfoState: "READY_FOR_DISTRIBUTION",
+    });
+    const result = await run(args, provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[invalid_input] App info AI1 is READY_FOR_DISTRIBUTION",
+    );
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should report a locale the app info does not have", async () => {
+    const { client, provider } = metadataClient();
+    const result = await run(
+      ["app-info", "set", "AI1", "--locale", "fr-FR", "--name", "x", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[not_found] App info AI1 has no fr-FR localisation",
+    );
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should require a locale, a field, valid URLs and a one-segment id", async () => {
+    const { client, provider } = metadataClient();
+    const noField = await run(
+      ["app-info", "set", "AI1", "--locale", "en-US"],
+      provider,
+    );
+    expect(noField.exitCode).toBe(1);
+    expect(noField.stderr).toContain("Give at least one field to change");
+    const noLocale = await run(
+      ["app-info", "set", "AI1", "--subtitle", "a"],
+      provider,
+    );
+    expect(noLocale.exitCode).toBe(1);
+    expect(noLocale.stderr).toContain("--locale");
+    const badUrl = await run(
+      [
+        "app-info",
+        "set",
+        "AI1",
+        "--locale",
+        "en-US",
+        "--privacy-policy-url",
+        "ftp://x",
+      ],
+      provider,
+    );
+    expect(badUrl.exitCode).toBe(1);
+    expect(badUrl.stderr).toContain("[invalid_input]");
+    const badId = await run(
+      ["app-info", "set", "../apps", "--locale", "en-US", "--name", "x"],
+      provider,
+    );
+    expect(badId.exitCode).toBe(1);
+    expect(badId.stderr).toContain("[invalid_input]");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});

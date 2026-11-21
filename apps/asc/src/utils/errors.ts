@@ -41,6 +41,11 @@ export class NotFoundError extends Error {
   override name = "NotFoundError";
 }
 
+/** Thrown when a version or app info is in a state that no longer accepts the change. */
+export class NotEditableError extends Error {
+  override name = "NotEditableError";
+}
+
 /** Thrown when `builds wait` gives up before the build finishes processing. */
 export class WaitTimeoutError extends Error {
   override name = "WaitTimeoutError";
@@ -118,6 +123,9 @@ export function classifyError(error: unknown): ClassifiedError {
   }
   if (error instanceof NotFoundError) {
     return { kind: "not_found", message: error.message };
+  }
+  if (error instanceof NotEditableError) {
+    return { kind: "invalid_input", message: error.message };
   }
   if (error instanceof WaitTimeoutError) {
     return { kind: "unavailable", message: error.message };
