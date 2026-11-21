@@ -5403,3 +5403,561 @@ describe("events submit", () => {
     expect(client.post).not.toHaveBeenCalled();
   });
 });
+
+/** A client answering the pricing, availability and age rating reads. */
+function storeClient({
+  appInfoState = "PREPARE_FOR_SUBMISSION",
+  failPatchAt = -1,
+}: {
+  appInfoState?: string;
+  failPatchAt?: number;
+} = {}) {
+  const price = (
+    id: string,
+    territory: string,
+    startDate: string | null,
+    endDate: string | null,
+  ) => ({
+    type: "appPrices",
+    id,
+    attributes: { manual: true, startDate, endDate },
+    relationships: {
+      appPricePoint: { data: { type: "appPricePoints", id: `P-${id}` } },
+      territory: { data: { type: "territories", id: territory } },
+    },
+  });
+  const point = (id: string, customerPrice: string, proceeds: string) => ({
+    type: "appPricePoints",
+    id: `P-${id}`,
+    attributes: { customerPrice, proceeds },
+  });
+  const territory = (id: string, currency: string) => ({
+    type: "territories",
+    id,
+    attributes: { currency },
+  });
+  const availability = (id: string, code: string, available: boolean) => ({
+    type: "territoryAvailabilities",
+    id,
+    attributes: {
+      available,
+      releaseDate: null,
+      preOrderEnabled: false,
+      preOrderPublishDate: null,
+      contentStatuses: available ? ["AVAILABLE"] : ["CANNOT_SELL"],
+    },
+    relationships: { territory: { data: { type: "territories", id: code } } },
+  });
+  const get = vi.fn((path: string, query: Record<string, unknown> = {}) => {
+    switch (path) {
+      case "/v1/apps/123/appPriceSchedule":
+        return Promise.resolve({
+          data: {
+            type: "appPriceSchedules",
+            id: "S1",
+            relationships: {
+              baseTerritory: { data: { type: "territories", id: "USA" } },
+            },
+          },
+          included: [territory("USA", "USD")],
+        });
+      case "/v1/appPriceSchedules/S1/manualPrices":
+        return Promise.resolve({
+          data: [
+            price("M1", "USA", null, "2027-01-01"),
+            price("M2", "USA", "2027-01-01", null),
+          ],
+          included: [
+            point("M1", "0.99", "0.84"),
+            point("M2", "1.99", "1.69"),
+            territory("USA", "USD"),
+          ],
+          links: { self: "x" },
+        });
+      case "/v1/appPriceSchedules/S1/automaticPrices":
+        // Two pages, to check the cursor is followed.
+        return Promise.resolve(
+          query.cursor === undefined
+            ? {
+                data: [price("A1", "JPN", null, null)],
+                included: [point("A1", "160", "136"), territory("JPN", "JPY")],
+                links: {
+                  self: "x",
+                  next: "https://api.appstoreconnect.apple.com/v1/appPriceSchedules/S1/automaticPrices?cursor=NEXT",
+                },
+              }
+            : {
+                data: [price("A2", "GBR", null, null)],
+                included: [
+                  point("A2", "0.99", "0.70"),
+                  territory("GBR", "GBP"),
+                ],
+                links: { self: "x" },
+              },
+        );
+      case "/v1/apps/123/appAvailabilityV2":
+        return Promise.resolve({
+          data: {
+            type: "appAvailabilities",
+            id: "AV1",
+            attributes: { availableInNewTerritories: true },
+          },
+        });
+      case "/v2/appAvailabilities/AV1/territoryAvailabilities":
+        return Promise.resolve({
+          data: [
+            availability("TA1", "USA", true),
+            availability("TA2", "GBR", false),
+            availability("TA3", "JPN", false),
+          ],
+          links: { self: "x" },
+        });
+      case "/v1/apps/123/appInfos":
+        return Promise.resolve({
+          data: [
+            {
+              type: "appInfos",
+              id: "AI1",
+              attributes: {
+                state: "PREPARE_FOR_SUBMISSION",
+                appStoreAgeRating: "FOUR_PLUS",
+              },
+            },
+          ],
+        });
+      case "/v1/appInfos/AI1":
+        return Promise.resolve({
+          data: {
+            type: "appInfos",
+            id: "AI1",
+            attributes: { state: appInfoState },
+          },
+        });
+      case "/v1/appInfos/AI1/ageRatingDeclaration":
+        return Promise.resolve({
+          data: {
+            type: "ageRatingDeclarations",
+            id: "D1",
+            attributes: {
+              gambling: false,
+              violenceRealistic: "NONE",
+              lootBox: null,
+              kidsAgeBand: null,
+            },
+          },
+        });
+      default:
+        return Promise.reject(new Error(`unexpected GET ${path}`));
+    }
+  });
+  let patches = 0;
+  const client: AscClient = {
+    ...noWrites(),
+    get: get as AscClient["get"],
+    patch: vi.fn(() =>
+      patches++ === failPatchAt
+        ? Promise.reject(new AscApiError(409, { errors: [] }))
+        : Promise.resolve({ data: {} }),
+    ) as AscClient["patch"],
+  };
+  return { client, provider: vi.fn<AscClientProvider>(() => client) };
+}
+
+describe("pricing", () => {
+  it("should print the base territory and the manual and automatic prices", async () => {
+    const { client, provider } = storeClient();
+    const result = await run(["pricing", "123"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/apps/123/appPriceSchedule",
+      expect.objectContaining({ include: ["baseTerritory"] }),
+    );
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/appPriceSchedules/S1/automaticPrices",
+      expect.objectContaining({ cursor: "NEXT" }),
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      appId: "123",
+      baseTerritory: { id: "USA", currency: "USD" },
+      manualPrices: [
+        {
+          territory: "USA",
+          currency: "USD",
+          customerPrice: "0.99",
+          proceeds: "0.84",
+          startDate: null,
+          endDate: "2027-01-01",
+        },
+        {
+          territory: "USA",
+          currency: "USD",
+          customerPrice: "1.99",
+          proceeds: "1.69",
+          startDate: "2027-01-01",
+          endDate: null,
+        },
+      ],
+      automaticPrices: [
+        {
+          territory: "JPN",
+          currency: "JPY",
+          customerPrice: "160",
+          proceeds: "136",
+          startDate: null,
+          endDate: null,
+        },
+        {
+          territory: "GBR",
+          currency: "GBP",
+          customerPrice: "0.99",
+          proceeds: "0.70",
+          startDate: null,
+          endDate: null,
+        },
+      ],
+    });
+  });
+
+  it("should filter by territory and reject a bad code", async () => {
+    const { client, provider } = storeClient();
+    const ok = await run(["pricing", "123", "--territory", "jpn"], provider);
+    expect(ok.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/appPriceSchedules/S1/manualPrices",
+      expect.objectContaining({ "filter[territory]": ["JPN"] }),
+    );
+    const bad = await run(["pricing", "123", "--territory", "US"], provider);
+    expect(bad.exitCode).toBe(1);
+    expect(bad.stderr).toContain("[invalid_input]");
+  });
+});
+
+describe("availability", () => {
+  it("should print each territory and those the app is missing from", async () => {
+    const { provider } = storeClient();
+    const result = await run(["availability", "123"], provider);
+    expect(result.exitCode).toBe(0);
+    const output = JSON.parse(result.stdout);
+    expect(output).toMatchObject({
+      appId: "123",
+      availableInNewTerritories: true,
+      availableCount: 1,
+      unavailable: ["GBR", "JPN"],
+    });
+    expect(output.territories[0]).toEqual({
+      territory: "USA",
+      available: true,
+      releaseDate: null,
+      preOrderEnabled: false,
+      preOrderPublishDate: null,
+      contentStatuses: ["AVAILABLE"],
+    });
+  });
+});
+
+describe("availability set", () => {
+  it("should show each territory's current availability without --yes", async () => {
+    const { client, provider } = storeClient();
+    const result = await run(
+      ["availability", "set", "123", "--territory", "usa,GBR", "--available"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("Dry run");
+    expect(client.patch).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "add-territories",
+      appId: "123",
+      territories: [
+        {
+          territory: "USA",
+          available: true,
+          contentStatuses: ["AVAILABLE"],
+          changes: false,
+        },
+        {
+          territory: "GBR",
+          available: false,
+          contentStatuses: ["CANNOT_SELL"],
+          changes: true,
+        },
+      ],
+    });
+  });
+
+  it("should change only the territories that differ with --yes", async () => {
+    const { client, provider } = storeClient();
+    const result = await run(
+      [
+        "availability",
+        "set",
+        "123",
+        "--territory",
+        "USA,GBR",
+        "--territory",
+        "JPN",
+        "--available",
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledTimes(2);
+    expect(client.patch).toHaveBeenCalledWith(
+      "/v1/territoryAvailabilities/TA2",
+      {
+        data: {
+          type: "territoryAvailabilities",
+          id: "TA2",
+          attributes: { available: true },
+        },
+      },
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "add-territories",
+      appId: "123",
+      changed: ["GBR", "JPN"],
+    });
+  });
+
+  it("should name the territories already changed when one fails", async () => {
+    const { provider } = storeClient({ failPatchAt: 1 });
+    const result = await run(
+      [
+        "availability",
+        "set",
+        "123",
+        "--territory",
+        "GBR,JPN",
+        "--available",
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[invalid_input] App Store Connect would not change availability in JPN",
+    );
+    expect(result.stderr).toContain("Already changed: GBR.");
+  });
+
+  it("should report a partway failure Apple did not reject as a conflict", async () => {
+    const { client, provider } = storeClient();
+    vi.mocked(client.patch)
+      .mockResolvedValueOnce({ data: {} })
+      .mockRejectedValueOnce(new AscApiError(503, undefined));
+    const result = await run(
+      [
+        "availability",
+        "set",
+        "123",
+        "--territory",
+        "GBR,JPN",
+        "--available",
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[unavailable]");
+    expect(result.stderr).toContain(
+      "Changing availability stopped partway. Already changed: GBR.",
+    );
+  });
+
+  it("should remove territories with --no-available", async () => {
+    const { client, provider } = storeClient();
+    const result = await run(
+      [
+        "availability",
+        "set",
+        "123",
+        "--territory",
+        "USA",
+        "--no-available",
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledWith(
+      "/v1/territoryAvailabilities/TA1",
+      {
+        data: {
+          type: "territoryAvailabilities",
+          id: "TA1",
+          attributes: { available: false },
+        },
+      },
+    );
+  });
+
+  it("should refuse a territory the app has no entry for, or a missing choice", async () => {
+    const { client, provider } = storeClient();
+    const unknown = await run(
+      ["availability", "set", "123", "--territory", "FRA", "--available"],
+      provider,
+    );
+    expect(unknown.exitCode).toBe(1);
+    expect(unknown.stderr).toContain(
+      "[not_found] App 123 has no availability entry for FRA",
+    );
+    const noChoice = await run(
+      ["availability", "set", "123", "--territory", "USA"],
+      provider,
+    );
+    expect(noChoice.exitCode).toBe(1);
+    expect(noChoice.stderr).toContain("--no-available");
+    const noTerritory = await run(
+      ["availability", "set", "123", "--available"],
+      provider,
+    );
+    expect(noTerritory.exitCode).toBe(1);
+    expect(noTerritory.stderr).toContain("--territory");
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+});
+
+describe("age-rating", () => {
+  it("should print each app info's declaration with every answer", async () => {
+    const { client, provider } = storeClient();
+    const result = await run(["age-rating", "123"], provider);
+    expect(result.exitCode).toBe(0);
+    // No field list, so new questions from Apple come through.
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/appInfos/AI1/ageRatingDeclaration",
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      appInfos: [
+        {
+          id: "AI1",
+          state: "PREPARE_FOR_SUBMISSION",
+          appStoreAgeRating: "FOUR_PLUS",
+          declaration: {
+            id: "D1",
+            answers: {
+              gambling: false,
+              violenceRealistic: "NONE",
+              lootBox: null,
+              kidsAgeBand: null,
+            },
+          },
+        },
+      ],
+    });
+  });
+});
+
+describe("age-rating set", () => {
+  const args = [
+    "age-rating",
+    "set",
+    "AI1",
+    "--answer",
+    "gambling=false",
+    "--answer",
+    "violenceRealistic=INFREQUENT",
+    "--answer",
+    "lootBox=true",
+  ];
+
+  it("should show the current and new answers without --yes", async () => {
+    const { client, provider } = storeClient();
+    const result = await run(args, provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "age-rating",
+      appInfo: { id: "AI1", state: "PREPARE_FOR_SUBMISSION" },
+      declarationId: "D1",
+      current: { gambling: false, violenceRealistic: "NONE", lootBox: null },
+      update: {
+        gambling: false,
+        violenceRealistic: "INFREQUENT",
+        lootBox: true,
+      },
+      changes: true,
+    });
+  });
+
+  it("should send only the changed answers with --yes", async () => {
+    const { client, provider } = storeClient();
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledWith("/v1/ageRatingDeclarations/D1", {
+      data: {
+        type: "ageRatingDeclarations",
+        id: "D1",
+        attributes: { violenceRealistic: "INFREQUENT", lootBox: true },
+      },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "age-rating",
+      appInfoId: "AI1",
+      declarationId: "D1",
+      changed: ["violenceRealistic", "lootBox"],
+    });
+  });
+
+  it("should name the answers Apple rejects", async () => {
+    const { provider } = storeClient({ failPatchAt: 0 });
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[invalid_input] App Store Connect rejected the age rating answers violenceRealistic, lootBox",
+    );
+    expect(result.stderr).toContain("INFREQUENT_OR_MILD");
+  });
+
+  it("should refuse an app info that is no longer editable", async () => {
+    const { client, provider } = storeClient({
+      appInfoState: "READY_FOR_DISTRIBUTION",
+    });
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[invalid_input] App info AI1 is READY_FOR_DISTRIBUTION",
+    );
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
+  it("should refuse a question the declaration does not have, and bad answers", async () => {
+    const { client, provider } = storeClient();
+    const unknown = await run(
+      ["age-rating", "set", "AI1", "--answer", "horror=NONE"],
+      provider,
+    );
+    expect(unknown.exitCode).toBe(1);
+    expect(unknown.stderr).toContain(
+      "[invalid_input] The age rating declaration has no question named horror",
+    );
+    const malformed = await run(
+      ["age-rating", "set", "AI1", "--answer", "gambling"],
+      provider,
+    );
+    expect(malformed.exitCode).toBe(1);
+    expect(malformed.stderr).toContain("name=value");
+    const twice = await run(
+      [
+        "age-rating",
+        "set",
+        "AI1",
+        "--answer",
+        "gambling=true",
+        "--answer",
+        "gambling=false",
+      ],
+      provider,
+    );
+    expect(twice.exitCode).toBe(1);
+    expect(twice.stderr).toContain("Give each answer once.");
+    const none = await run(["age-rating", "set", "AI1"], provider);
+    expect(none.exitCode).toBe(1);
+    expect(none.stderr).toContain("--answer");
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+});

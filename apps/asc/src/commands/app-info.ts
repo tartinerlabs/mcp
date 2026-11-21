@@ -41,7 +41,7 @@ interface AppInfoAttributes {
  * appInfoLocalizations; this list follows App Store Connect's behaviour and
  * is unverified against the API.
  */
-const EDITABLE_STATES = new Set([
+export const EDITABLE_STATES = new Set([
   "PREPARE_FOR_SUBMISSION",
   "DEVELOPER_REJECTED",
   "REJECTED",

@@ -5,12 +5,24 @@ import pkg from "../package.json" with { type: "json" };
 import type { AscClient } from "./asc/client.ts";
 import type { CredentialOptions } from "./asc/credentials.ts";
 import {
+  ageRatingInput,
+  getAgeRating,
+  setAgeRating,
+  setAgeRatingInput,
+} from "./commands/age-rating.ts";
+import {
   appInfoInput,
   getAppInfo,
   setAppInfo,
   setAppInfoInput,
 } from "./commands/app-info.ts";
 import { appsInput, listApps } from "./commands/apps.ts";
+import {
+  availabilityInput,
+  getAvailability,
+  setAvailability,
+  setAvailabilityInput,
+} from "./commands/availability.ts";
 import {
   buildsInput,
   complianceInput,
@@ -72,6 +84,7 @@ import {
   uploadPageTestInput,
   uploadPageTestScreenshots,
 } from "./commands/page-tests.ts";
+import { getPricing, pricingInput } from "./commands/pricing.ts";
 import {
   deleteReplyInput,
   deleteReviewReply,
@@ -189,7 +202,7 @@ export function createProgram(
   const program = new Command()
     .name("asc")
     .description(
-      "App Store Connect with your own API key: apps, versions and their metadata, screenshots and app previews, custom product pages, product page optimization tests, in-app events, app info, builds, release status, TestFlight groups, testers, feedback and notes, and customer reviews. Commands that change anything only print what they would do unless given --yes.",
+      "App Store Connect with your own API key: apps, versions and their metadata, screenshots and app previews, custom product pages, product page optimization tests, in-app events, app info, pricing, availability and age rating, builds, release status, TestFlight groups, testers, feedback and notes, and customer reviews. Commands that change anything only print what they would do unless given --yes.",
     )
     .version(pkg.version)
     .option("--key-id <id>", "API key ID (default: ASC_KEY_ID)")
@@ -357,6 +370,89 @@ export function createProgram(
         setAppInfoInput,
         { appInfoId, ...options },
         setAppInfo,
+      );
+    });
+
+  program
+    .command("pricing")
+    .description(
+      "An app's price schedule: its base territory and currency, the prices set by hand (current and scheduled) and the prices Apple derives for every other territory, each with customer price, proceeds and start and end dates. Prices can only be changed in App Store Connect.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option(
+      "--territory <codes>",
+      "only these territories, comma-separated alpha-3 codes such as USA,JPN",
+    )
+    .action(async (appId: string, options, command: Command) => {
+      await run(command, pricingInput, { appId, ...options }, getPricing);
+    });
+
+  const availability = program
+    .command("availability")
+    .description(
+      "Where an app is sold: whether it joins new territories automatically, the territories it is missing from, and each territory's availability, release date, pre-order and content statuses (such as one that blocks sale there).",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .action(async (appId: string, _options, command: Command) => {
+      await run(command, availabilityInput, { appId }, getAvailability);
+    });
+
+  availability
+    .command("set")
+    .description(
+      "Add an app to territories (--available) or remove it from them (--no-available). Without --yes, prints each territory's current availability. Needs a key with the App Manager role.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option(
+      "--territory <codes>",
+      "alpha-3 territory codes, comma-separated or repeated, such as USA,GBR (required)",
+      collectList,
+    )
+    .option("--available", "make the app available in these territories")
+    .option("--no-available", "remove the app from these territories")
+    .option(...YES)
+    .action(async (appId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setAvailabilityInput,
+        {
+          appId,
+          territories: options.territory ?? [],
+          available: options.available,
+          yes: options.yes,
+        },
+        setAvailability,
+      );
+    });
+
+  const ageRating = program
+    .command("age-rating")
+    .description(
+      "Each app info's state, App Store age rating and age rating declaration, with every answer App Store Connect returns. Apple changes the questions over time, so this lists the current ones.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .action(async (appId: string, _options, command: Command) => {
+      await run(command, ageRatingInput, { appId }, getAgeRating);
+    });
+
+  ageRating
+    .command("set")
+    .description(
+      "Change answers in an app info's age rating declaration, such as --answer gambling=false --answer violenceRealistic=INFREQUENT. Names are those the age-rating command lists; Apple checks the values. Only an app info being prepared or rejected accepts changes. Without --yes, prints the current and new answers. Needs a key with the App Manager role.",
+    )
+    .argument("<app-info-id>", "app info id from the age-rating command")
+    .option(
+      "--answer <name=value>",
+      "one answer, repeated for more",
+      (value: string, previous: string[] = []) => [...previous, value],
+    )
+    .option(...YES)
+    .action(async (appInfoId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setAgeRatingInput,
+        { appInfoId, answers: options.answer ?? [], yes: options.yes },
+        setAgeRating,
       );
     });
 
