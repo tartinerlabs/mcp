@@ -32,9 +32,13 @@ export type AscQuery = Record<
   string | number | boolean | readonly string[] | undefined
 >;
 
-/** The App Store Connect operation the commands depend on. */
+/** The App Store Connect operations the commands depend on. */
 export interface AscClient {
   get<T>(path: string, query?: AscQuery): Promise<T>;
+  /** Sends a JSON:API body; resolves to the response document. */
+  post<T>(path: string, body: unknown): Promise<T>;
+  /** Resolves when Apple answers 2xx (usually 204, with no body). */
+  delete(path: string): Promise<void>;
 }
 
 export interface AscClientOptions {
@@ -73,6 +77,48 @@ export async function createAscClient(
     );
   }
 
+  /** Signs a fresh token, sends the request and returns the parsed JSON body (undefined when empty). */
+  async function request(
+    method: "GET" | "POST" | "DELETE",
+    url: URL,
+    body?: unknown,
+  ): Promise<unknown> {
+    const token = await signEs256Jwt({
+      header: { kid: key.keyId, typ: "JWT" },
+      payload: tokenClaims(key, now()),
+      key: signingKey,
+    });
+    const response = await send(url, {
+      method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: "application/json",
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    }).catch((error: unknown) => {
+      if (error instanceof TypeError) {
+        throw new NetworkError("fetch failed", { cause: error });
+      }
+      throw error;
+    });
+    // Some errors (e.g. 406) are plain text, not JSON:API, and a 204 has no body.
+    const data: unknown = await response.json().catch(() => undefined);
+    if (!response.ok) throw new AscApiError(response.status, data);
+    return data;
+  }
+
+  /** A JSON body is required for GET and POST. */
+  function json<T>(data: unknown): T {
+    if (data === undefined) {
+      throw new UnexpectedResponseError(
+        "App Store Connect returned a response that is not JSON.",
+      );
+    }
+    return data as T;
+  }
+
   return {
     async get<T>(path: string, query: AscQuery = {}): Promise<T> {
       const url = new URL(path, ASC_API);
@@ -83,32 +129,13 @@ export async function createAscClient(
           Array.isArray(value) ? value.join(",") : String(value),
         );
       }
-      const token = await signEs256Jwt({
-        header: { kid: key.keyId, typ: "JWT" },
-        payload: tokenClaims(key, now()),
-        key: signingKey,
-      });
-      const response = await send(url, {
-        headers: {
-          authorization: `Bearer ${token}`,
-          accept: "application/json",
-        },
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      }).catch((error: unknown) => {
-        if (error instanceof TypeError) {
-          throw new NetworkError("fetch failed", { cause: error });
-        }
-        throw error;
-      });
-      // Some errors (e.g. 406) are plain text, not JSON:API.
-      const data: unknown = await response.json().catch(() => undefined);
-      if (!response.ok) throw new AscApiError(response.status, data);
-      if (data === undefined) {
-        throw new UnexpectedResponseError(
-          "App Store Connect returned a response that is not JSON.",
-        );
-      }
-      return data as T;
+      return json<T>(await request("GET", url));
+    },
+    async post<T>(path: string, body: unknown): Promise<T> {
+      return json<T>(await request("POST", new URL(path, ASC_API), body));
+    },
+    async delete(path: string): Promise<void> {
+      await request("DELETE", new URL(path, ASC_API));
     },
   };
 }
@@ -137,7 +164,7 @@ export function pageInfo(document: AscDocument<unknown>): {
 
 /** The included resource a to-one relationship points at, if the response carries it. */
 export function related<Attributes>(
-  document: AscDocument<unknown>,
+  document: Pick<AscDocument<unknown>, "included">,
   resource: AscResource<unknown>,
   relationship: string,
 ): Attributes | undefined {

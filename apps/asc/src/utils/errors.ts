@@ -36,6 +36,11 @@ export class UnexpectedResponseError extends Error {
   override name = "UnexpectedResponseError";
 }
 
+/** Thrown when what a command needs does not exist, such as a reply to delete. */
+export class NotFoundError extends Error {
+  override name = "NotFoundError";
+}
+
 /** Thrown when `builds wait` gives up before the build finishes processing. */
 export class WaitTimeoutError extends Error {
   override name = "WaitTimeoutError";
@@ -110,6 +115,9 @@ export function classifyError(error: unknown): ClassifiedError {
   }
   if (error instanceof UnexpectedResponseError) {
     return { kind: "unexpected", message: error.message };
+  }
+  if (error instanceof NotFoundError) {
+    return { kind: "not_found", message: error.message };
   }
   if (error instanceof WaitTimeoutError) {
     return { kind: "unavailable", message: error.message };

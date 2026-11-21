@@ -313,3 +313,60 @@ describe("keySchema", () => {
     expect(keySchema.safeParse(input).success).toBe(success);
   });
 });
+
+describe("createAscClient writes", () => {
+  it("should POST a JSON body with a fresh token and return the document", async () => {
+    const fetch = stubFetch(
+      Response.json(
+        { data: { type: "customerReviewResponses", id: "r1" } },
+        {
+          status: 201,
+        },
+      ),
+    );
+    const client = await clientFor(key("TEAMKEY001", ISSUER), fetch);
+    const body = { data: { type: "customerReviewResponses" } };
+    await expect(
+      client.post("/v1/customerReviewResponses", body),
+    ).resolves.toEqual({
+      data: { type: "customerReviewResponses", id: "r1" },
+    });
+    const [url, init] = fetch.mock.calls[0] as [URL, RequestInit];
+    expect(String(url)).toBe(
+      "https://api.appstoreconnect.apple.com/v1/customerReviewResponses",
+    );
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe(JSON.stringify(body));
+    expect(init.headers).toMatchObject({ "content-type": "application/json" });
+    expect(sentToken(fetch)).toMatch(/^[\w-]+\.[\w-]+\.[\w-]+$/);
+  });
+
+  it("should DELETE and accept a 204 with no body", async () => {
+    const fetch = stubFetch(new Response(null, { status: 204 }));
+    const client = await clientFor(key("TEAMKEY001", ISSUER), fetch);
+    await expect(
+      client.delete("/v1/customerReviewResponses/r1"),
+    ).resolves.toBeUndefined();
+    const [, init] = fetch.mock.calls[0] as [URL, RequestInit];
+    expect(init.method).toBe("DELETE");
+    expect(init.body).toBeUndefined();
+    expect(init.headers).not.toHaveProperty("content-type");
+  });
+
+  it("should throw AscApiError when a write is refused", async () => {
+    const fetch = stubFetch(
+      Response.json({ errors: [{ code: "FORBIDDEN_ERROR" }] }, { status: 403 }),
+    );
+    const client = await clientFor(key("TEAMKEY001", ISSUER), fetch);
+    await expect(client.post("/v1/x", {})).rejects.toBeInstanceOf(AscApiError);
+    await expect(client.delete("/v1/x")).rejects.toBeInstanceOf(AscApiError);
+  });
+
+  it("should reject a POST answered without JSON", async () => {
+    const fetch = stubFetch(new Response(null, { status: 201 }));
+    const client = await clientFor(key("TEAMKEY001", ISSUER), fetch);
+    await expect(client.post("/v1/x", {})).rejects.toBeInstanceOf(
+      UnexpectedResponseError,
+    );
+  });
+});
