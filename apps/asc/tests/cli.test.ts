@@ -1598,3 +1598,481 @@ describe("testflight feedback", () => {
     expect(client.get).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * A client for the TestFlight writes: `get` answers by path, and tester
+ * lookups find `members` in the group and `appTesters` in the group's app.
+ */
+function testflightClient({
+  members = {},
+  appTesters = {},
+  buildInGroup = false,
+  notes,
+}: {
+  members?: Record<string, string>;
+  appTesters?: Record<string, string>;
+  buildInGroup?: boolean;
+  notes?: { id: string; whatsNew: string | null };
+} = {}) {
+  const get = vi.fn((path: string, query: Record<string, unknown> = {}) => {
+    if (path === "/v1/betaGroups/G1") {
+      return Promise.resolve({
+        data: {
+          type: "betaGroups",
+          id: "G1",
+          attributes: {
+            name: "Friends",
+            isInternalGroup: false,
+            hasAccessToAllBuilds: null,
+          },
+          relationships: { app: { data: { type: "apps", id: "123" } } },
+        },
+      });
+    }
+    if (path === "/v1/builds/B1") {
+      return Promise.resolve({
+        data: { type: "builds", id: "B1", attributes: { version: "42" } },
+      });
+    }
+    if (path === "/v1/betaTesters") {
+      const email = query["filter[email]"] as string;
+      const id = query["filter[betaGroups]"]
+        ? members[email]
+        : appTesters[email];
+      return Promise.resolve({
+        data: id ? [{ type: "betaTesters", id }] : [],
+      });
+    }
+    if (path === "/v1/builds") {
+      return Promise.resolve({
+        data: buildInGroup ? [{ type: "builds", id: "B1" }] : [],
+      });
+    }
+    if (path === "/v1/betaBuildLocalizations") {
+      return Promise.resolve({
+        data: notes
+          ? [
+              {
+                type: "betaBuildLocalizations",
+                id: notes.id,
+                attributes: { whatsNew: notes.whatsNew, locale: "en-GB" },
+              },
+            ]
+          : [],
+      });
+    }
+    return Promise.reject(new Error(`unexpected GET ${path}`));
+  });
+  const client: AscClient = {
+    get: get as AscClient["get"],
+    post: vi.fn((path: string) =>
+      Promise.resolve(
+        path === "/v1/betaTesters"
+          ? { data: { type: "betaTesters", id: "NEW1" } }
+          : undefined,
+      ),
+    ) as AscClient["post"],
+    patch: vi.fn(() => Promise.resolve({ data: {} })) as AscClient["patch"],
+    delete: vi.fn(() => Promise.resolve()) as AscClient["delete"],
+  };
+  return { client, provider: vi.fn<AscClientProvider>(() => client) };
+}
+
+describe("testflight testers add", () => {
+  const options = {
+    members: { "in@example.com": "T1" },
+    appTesters: { "app@example.com": "T2" },
+  };
+  const emails = "in@example.com,app@example.com";
+
+  it("should only show what would happen to each email without --yes", async () => {
+    const { client, provider } = testflightClient(options);
+    const result = await run(
+      [
+        "testflight",
+        "testers",
+        "add",
+        "G1",
+        "--email",
+        emails,
+        "--email",
+        "new@example.com",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith("/v1/betaTesters", {
+      "filter[email]": "app@example.com",
+      "filter[apps]": "123",
+      "fields[betaTesters]": ["state"],
+      limit: 1,
+    });
+    expect(client.post).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "add-testers",
+      group: {
+        id: "G1",
+        name: "Friends",
+        internal: false,
+        hasAccessToAllBuilds: null,
+      },
+      testers: [
+        { email: "in@example.com", testerId: "T1", change: "none" },
+        { email: "app@example.com", testerId: "T2", change: "add" },
+        { email: "new@example.com", change: "invite" },
+      ],
+    });
+    expect(result.stderr).toContain("Dry run: nothing was changed");
+  });
+
+  it("should add app testers to the group and invite new ones with --yes", async () => {
+    const { client, provider } = testflightClient(options);
+    const result = await run(
+      [
+        "testflight",
+        "testers",
+        "add",
+        "G1",
+        "--email",
+        `${emails},new@example.com`,
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledTimes(2);
+    expect(client.post).toHaveBeenCalledWith(
+      "/v1/betaGroups/G1/relationships/betaTesters",
+      { data: [{ type: "betaTesters", id: "T2" }] },
+    );
+    expect(client.post).toHaveBeenCalledWith("/v1/betaTesters", {
+      data: {
+        type: "betaTesters",
+        attributes: { email: "new@example.com" },
+        relationships: {
+          betaGroups: { data: [{ type: "betaGroups", id: "G1" }] },
+        },
+      },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "add-testers",
+      groupId: "G1",
+      testers: [
+        { email: "in@example.com", testerId: "T1", change: "none" },
+        { email: "app@example.com", testerId: "T2", change: "add" },
+        { email: "new@example.com", testerId: "NEW1", change: "invite" },
+      ],
+    });
+  });
+
+  it("should write nothing when everyone is already in the group", async () => {
+    const { client, provider } = testflightClient(options);
+    const result = await run(
+      [
+        "testflight",
+        "testers",
+        "add",
+        "G1",
+        "--email",
+        "in@example.com",
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).not.toHaveBeenCalled();
+  });
+
+  it("should reject a missing or malformed email before calling Apple", async () => {
+    const { client, provider } = testflightClient();
+    const missing = await run(["testflight", "testers", "add", "G1"], provider);
+    expect(missing.exitCode).toBe(1);
+    expect(missing.stderr).toContain("Give at least one tester with --email.");
+    const bad = await run(
+      ["testflight", "testers", "add", "G1", "--email", "nope"],
+      provider,
+    );
+    expect(bad.exitCode).toBe(1);
+    expect(bad.stderr).toContain("Each --email must be an email address.");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("testflight testers remove", () => {
+  const options = { members: { "in@example.com": "T1" } };
+
+  it("should only show which emails are in the group without --yes", async () => {
+    const { client, provider } = testflightClient(options);
+    const result = await run(
+      [
+        "testflight",
+        "testers",
+        "remove",
+        "G1",
+        "--email",
+        "in@example.com,out@example.com",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.delete).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      dryRun: true,
+      action: "remove-testers",
+      testers: [
+        { email: "in@example.com", testerId: "T1", change: "remove" },
+        { email: "out@example.com", change: "none" },
+      ],
+    });
+  });
+
+  it("should remove the group's testers with --yes", async () => {
+    const { client, provider } = testflightClient(options);
+    const result = await run(
+      [
+        "testflight",
+        "testers",
+        "remove",
+        "G1",
+        "--email",
+        "in@example.com,out@example.com",
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.delete).toHaveBeenCalledWith(
+      "/v1/betaGroups/G1/relationships/betaTesters",
+      { data: [{ type: "betaTesters", id: "T1" }] },
+    );
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      dryRun: false,
+      groupId: "G1",
+    });
+  });
+
+  it("should not call Apple to remove when no email is in the group", async () => {
+    const { client, provider } = testflightClient();
+    await run(
+      [
+        "testflight",
+        "testers",
+        "remove",
+        "G1",
+        "--email",
+        "out@example.com",
+        "--yes",
+      ],
+      provider,
+    );
+    expect(client.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe("testflight groups add-build", () => {
+  it("should only show the group and the build without --yes", async () => {
+    const { client, provider } = testflightClient();
+    const result = await run(
+      ["testflight", "groups", "add-build", "G1", "B1"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/builds",
+      expect.objectContaining({
+        "filter[betaGroups]": "G1",
+        "filter[id]": "B1",
+      }),
+    );
+    expect(client.post).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "add-build",
+      group: expect.objectContaining({ id: "G1", name: "Friends" }),
+      build: { id: "B1", version: "42" },
+      changes: true,
+    });
+  });
+
+  it("should add the build with --yes", async () => {
+    const { client, provider } = testflightClient();
+    const result = await run(
+      ["testflight", "groups", "add-build", "G1", "B1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith(
+      "/v1/betaGroups/G1/relationships/builds",
+      { data: [{ type: "builds", id: "B1" }] },
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "add-build",
+      groupId: "G1",
+      buildId: "B1",
+      changed: true,
+    });
+  });
+
+  it("should not write when the group already has the build", async () => {
+    const { client, provider } = testflightClient({ buildInGroup: true });
+    const result = await run(
+      ["testflight", "groups", "add-build", "G1", "B1", "--yes"],
+      provider,
+    );
+    expect(client.post).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toMatchObject({ changed: false });
+  });
+
+  it("should surface Apple refusing a build that has not passed beta review", async () => {
+    const { client, provider } = testflightClient();
+    vi.mocked(client.post).mockRejectedValue(
+      new AscApiError(409, {
+        errors: [{ code: "ENTITY_ERROR", detail: "Build is not approved." }],
+      }),
+    );
+    const result = await run(
+      ["testflight", "groups", "add-build", "G1", "B1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/^\[/);
+  });
+});
+
+describe("testflight notes", () => {
+  it("should show the current and new notes without --yes", async () => {
+    const { client, provider } = testflightClient({
+      notes: { id: "L1", whatsNew: "Old notes" },
+    });
+    const result = await run(
+      ["testflight", "notes", "B1", "--locale", "en-GB", "--body", "New notes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/betaBuildLocalizations",
+      expect.objectContaining({
+        "filter[build]": "B1",
+        "filter[locale]": "en-GB",
+      }),
+    );
+    expect(client.patch).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "notes",
+      build: { id: "B1", version: "42" },
+      locale: "en-GB",
+      current: "Old notes",
+      whatsNew: "New notes",
+      creates: false,
+      changes: true,
+    });
+  });
+
+  it("should update existing notes with --yes", async () => {
+    const { client, provider } = testflightClient({
+      notes: { id: "L1", whatsNew: "Old notes" },
+    });
+    const result = await run(
+      [
+        "testflight",
+        "notes",
+        "B1",
+        "--locale",
+        "en-GB",
+        "--body",
+        "New notes",
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledWith("/v1/betaBuildLocalizations/L1", {
+      data: {
+        type: "betaBuildLocalizations",
+        id: "L1",
+        attributes: { whatsNew: "New notes" },
+      },
+    });
+    expect(client.post).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "notes",
+      buildId: "B1",
+      locale: "en-GB",
+      changed: true,
+    });
+  });
+
+  it("should create notes for a language the build has none in", async () => {
+    const { client, provider } = testflightClient();
+    const dir = await mkdtemp(join(tmpdir(), "asc-notes-"));
+    const file = join(dir, "notes.txt");
+    await writeFile(file, "Try the timeline.\n");
+    const result = await run(
+      [
+        "testflight",
+        "notes",
+        "B1",
+        "--locale",
+        "fr-FR",
+        "--body-file",
+        file,
+        "--yes",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v1/betaBuildLocalizations", {
+      data: {
+        type: "betaBuildLocalizations",
+        attributes: { locale: "fr-FR", whatsNew: "Try the timeline." },
+        relationships: { build: { data: { type: "builds", id: "B1" } } },
+      },
+    });
+  });
+
+  it("should not write notes that are unchanged", async () => {
+    const { client, provider } = testflightClient({
+      notes: { id: "L1", whatsNew: "Same" },
+    });
+    const result = await run(
+      [
+        "testflight",
+        "notes",
+        "B1",
+        "--locale",
+        "en-GB",
+        "--body",
+        "Same",
+        "--yes",
+      ],
+      provider,
+    );
+    expect(client.patch).not.toHaveBeenCalled();
+    expect(client.post).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toMatchObject({ changed: false });
+  });
+
+  it("should require a locale and the notes", async () => {
+    const { client, provider } = testflightClient();
+    const noLocale = await run(
+      ["testflight", "notes", "B1", "--body", "x"],
+      provider,
+    );
+    expect(noLocale.exitCode).toBe(1);
+    expect(noLocale.stderr).toContain("--locale");
+    const noBody = await run(
+      ["testflight", "notes", "B1", "--locale", "en-GB"],
+      provider,
+    );
+    expect(noBody.exitCode).toBe(1);
+    expect(noBody.stderr).toContain(
+      "Give the notes with --body or --body-file.",
+    );
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});

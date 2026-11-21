@@ -371,6 +371,25 @@ describe("createAscClient writes", () => {
     expect(init.headers).not.toHaveProperty("content-type");
   });
 
+  it("should POST a relationship change and accept a 204", async () => {
+    const fetch = stubFetch(new Response(null, { status: 204 }));
+    const client = await clientFor(key("TEAMKEY001", ISSUER), fetch);
+    await expect(
+      client.post("/v1/betaGroups/g1/relationships/builds", { data: [] }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("should DELETE with a body when removing from a relationship", async () => {
+    const fetch = stubFetch(new Response(null, { status: 204 }));
+    const client = await clientFor(key("TEAMKEY001", ISSUER), fetch);
+    const body = { data: [{ type: "betaTesters", id: "t1" }] };
+    await client.delete("/v1/betaGroups/g1/relationships/betaTesters", body);
+    const [, init] = fetch.mock.calls[0] as [URL, RequestInit];
+    expect(init.method).toBe("DELETE");
+    expect(init.body).toBe(JSON.stringify(body));
+    expect(init.headers).toMatchObject({ "content-type": "application/json" });
+  });
+
   it("should throw AscApiError when a write is refused", async () => {
     const fetch = stubFetch(
       Response.json({ errors: [{ code: "FORBIDDEN_ERROR" }] }, { status: 403 }),
