@@ -9,6 +9,7 @@ import { type AscKey, keySchema } from "../src/schemas/common.ts";
 import {
   AscApiError,
   CredentialsError,
+  classifyError,
   NetworkError,
   UnexpectedResponseError,
 } from "../src/utils/errors.ts";
@@ -404,6 +405,51 @@ describe("createAscClient writes", () => {
     const client = await clientFor(key("TEAMKEY001", ISSUER), fetch);
     await expect(client.post("/v1/x", {})).rejects.toBeInstanceOf(
       UnexpectedResponseError,
+    );
+  });
+});
+
+describe("createAscClient upload", () => {
+  const operation = {
+    method: "PUT",
+    url: "https://store-030.blobstore.apple.com/upload?Expires=1",
+    offset: 0,
+    length: 3,
+    requestHeaders: [{ name: "Content-Type", value: "image/png" }],
+  };
+
+  it("should send the part to Apple's URL with its headers and no token", async () => {
+    const fetch = stubFetch(new Response(null, { status: 200 }));
+    const client = await clientFor(key("TEAMKEY001", ISSUER), fetch);
+    const part = new Uint8Array([1, 2, 3]);
+    await expect(client.upload(operation, part)).resolves.toBeUndefined();
+    const [url, init] = fetch.mock.calls[0] as [URL, RequestInit];
+    expect(String(url)).toBe(operation.url);
+    expect(init.method).toBe("PUT");
+    expect(init.body).toBe(part);
+    expect(init.headers).toEqual({ "Content-Type": "image/png" });
+  });
+
+  it("should refuse an upload URL that is not HTTPS without calling it", async () => {
+    const fetch = stubFetch(new Response(null, { status: 200 }));
+    const client = await clientFor(key("TEAMKEY001", ISSUER), fetch);
+    for (const url of ["http://example.com/x", "not a url", undefined]) {
+      await expect(
+        client.upload({ ...operation, url }, new Uint8Array(3)),
+      ).rejects.toBeInstanceOf(UnexpectedResponseError);
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("should not blame the API key when the part is refused", async () => {
+    const fetch = stubFetch(new Response("expired", { status: 403 }));
+    const client = await clientFor(key("TEAMKEY001", ISSUER), fetch);
+    const error = await client
+      .upload(operation, new Uint8Array(3))
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(UnexpectedResponseError);
+    expect(classifyError(error).message).toContain(
+      "the upload URL may have expired",
     );
   });
 });

@@ -35,7 +35,7 @@ interface VersionAttributes {
  * appStoreVersionLocalizations; this list and the promotional text exception
  * follow App Store Connect's behaviour and are unverified against the API.
  */
-const EDITABLE_STATES = new Set([
+export const EDITABLE_STATES = new Set([
   "PREPARE_FOR_SUBMISSION",
   "DEVELOPER_REJECTED",
   "REJECTED",
@@ -44,7 +44,7 @@ const EDITABLE_STATES = new Set([
 ]);
 
 /** The version as the metadata commands print it. */
-async function readVersion(client: AscClient, versionId: string) {
+export async function readVersion(client: AscClient, versionId: string) {
   const { data } = await client.get<{ data: AscResource<VersionAttributes> }>(
     `/v1/appStoreVersions/${versionId}`,
     {

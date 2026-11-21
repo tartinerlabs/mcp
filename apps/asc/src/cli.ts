@@ -33,6 +33,16 @@ import {
   replyToReview,
 } from "./commands/review-replies.ts";
 import { listReviews, reviewsInput } from "./commands/reviews.ts";
+import {
+  deleteInput,
+  deleteScreenshots,
+  getScreenshots,
+  reorderInput,
+  reorderScreenshots,
+  screenshotsInput,
+  uploadInput,
+  uploadScreenshots,
+} from "./commands/screenshots.ts";
 import { getStatus, statusInput } from "./commands/status.ts";
 import {
   addBuildInput,
@@ -133,7 +143,7 @@ export function createProgram(
   const program = new Command()
     .name("asc")
     .description(
-      "App Store Connect with your own API key: apps, versions and their metadata, app info, builds, release status, TestFlight groups, testers, feedback and notes, and customer reviews. Commands that change anything only print what they would do unless given --yes.",
+      "App Store Connect with your own API key: apps, versions and their metadata, screenshots and app previews, app info, builds, release status, TestFlight groups, testers, feedback and notes, and customer reviews. Commands that change anything only print what they would do unless given --yes.",
     )
     .version(pkg.version)
     .option("--key-id <id>", "API key ID (default: ASC_KEY_ID)")
@@ -301,6 +311,90 @@ export function createProgram(
         setAppInfoInput,
         { appInfoId, ...options },
         setAppInfo,
+      );
+    });
+
+  const screenshots = program
+    .command("screenshots")
+    .description(
+      "A version's screenshots and app previews per locale and device group, in display order: placement id, file name and state.",
+    )
+    .argument("<version-id>", "version id from the versions command")
+    .option("--locale <locale>", "only this locale, such as en-US")
+    .action(async (versionId: string, options, command: Command) => {
+      await run(
+        command,
+        screenshotsInput,
+        { versionId, ...options },
+        getScreenshots,
+      );
+    });
+
+  screenshots
+    .command("upload")
+    .description(
+      "Upload a folder of screenshots (.png, .jpg) and app previews (.mp4, .m4v, .mov) to a version: one subfolder per locale, such as en-US. A file goes to the device group its name contains, such as IPHONE_DYNAMIC_ISLAND_LARGE_PROFILE, or for a screenshot the one its pixel size fits; previews must name it. Files are added after those already there, in file name order. Only a version being prepared or rejected accepts them, and a device group holds at most Apple's limit (10 screenshots, 3 app previews). Without --yes, prints where each file would go. Needs a key with the App Manager role.",
+    )
+    .argument("<version-id>", "version id from the versions command")
+    .option("--dir <folder>", "the folder of locale subfolders (required)")
+    .option(...YES)
+    .action(async (versionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        uploadInput,
+        { versionId, ...options },
+        uploadScreenshots,
+      );
+    });
+
+  screenshots
+    .command("reorder")
+    .description(
+      "Set the display order of one locale's screenshots, or app previews, in one device group: give all of them, in the new order. Without --yes, prints the current and new order.",
+    )
+    .argument("<version-id>", "version id from the versions command")
+    .option("--locale <locale>", "the locale, such as en-US (required)")
+    .option(
+      "--group <group>",
+      "the device group from the screenshots command (required)",
+    )
+    .option(
+      "--placement <ids>",
+      "placement ids in the new order, comma-separated or repeated",
+      collectList,
+    )
+    .option(...YES)
+    .action(async (versionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        reorderInput,
+        {
+          versionId,
+          // `screenshots` also defines --locale, so Commander hands it to the parent.
+          locale: command.parent?.opts().locale,
+          ...options,
+          placements: options.placement ?? [],
+        },
+        reorderScreenshots,
+      );
+    });
+
+  screenshots
+    .command("delete")
+    .description(
+      "Remove screenshots or app previews from a version being prepared or rejected, by placement id; the files stay in the app's asset library. Without --yes, prints each one with its version and locale.",
+    )
+    .argument(
+      "<placement-id...>",
+      "placement ids from the screenshots command (up to 50)",
+    )
+    .option(...YES)
+    .action(async (placements: string[], options, command: Command) => {
+      await runWrite(
+        command,
+        deleteInput,
+        { placements, yes: options.yes },
+        deleteScreenshots,
       );
     });
 

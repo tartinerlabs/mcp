@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Command } from "commander";
@@ -9,15 +9,20 @@ import {
   createProgram,
   type ProgramOptions,
 } from "../src/cli.ts";
-import { AscApiError, CredentialsError } from "../src/utils/errors.ts";
+import {
+  AscApiError,
+  CredentialsError,
+  UnexpectedResponseError,
+} from "../src/utils/errors.ts";
 
 /** Write methods for read-only tests: any call fails the test. */
-function noWrites(): Pick<AscClient, "post" | "patch" | "delete"> {
+function noWrites(): Pick<AscClient, "post" | "patch" | "delete" | "upload"> {
   const fail = () => Promise.reject(new Error("unexpected write"));
   return {
     post: vi.fn(fail) as AscClient["post"],
     patch: vi.fn(fail) as AscClient["patch"],
     delete: vi.fn(fail) as AscClient["delete"],
+    upload: vi.fn(fail) as AscClient["upload"],
   };
 }
 
@@ -959,6 +964,7 @@ describe("reviews reply and delete-reply", () => {
   /** A client that reads the review and records writes. */
   function writable(responseId?: string, post?: () => Promise<unknown>) {
     const client: AscClient = {
+      ...noWrites(),
       get: vi.fn(() =>
         Promise.resolve(reviewDocument(responseId)),
       ) as AscClient["get"],
@@ -1664,6 +1670,7 @@ function testflightClient({
     return Promise.reject(new Error(`unexpected GET ${path}`));
   });
   const client: AscClient = {
+    ...noWrites(),
     get: get as AscClient["get"],
     post: vi.fn((path: string) =>
       Promise.resolve(
@@ -2167,6 +2174,7 @@ function metadataClient({
     return Promise.reject(new Error(`unexpected GET ${path}`));
   });
   const client: AscClient = {
+    ...noWrites(),
     get: get as AscClient["get"],
     post: vi.fn(() => Promise.reject(new Error("unexpected POST"))),
     patch: vi.fn(() => Promise.resolve({ data: {} })) as AscClient["patch"],
@@ -2527,5 +2535,789 @@ describe("app-info set", () => {
     expect(badId.exitCode).toBe(1);
     expect(badId.stderr).toContain("[invalid_input]");
     expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+const IPHONE = "IPHONE_DYNAMIC_ISLAND_LARGE_PROFILE";
+const IPAD = "IPAD_PRO_3GEN_129_PROFILE";
+
+/** The header of a PNG of this size, which is all `imageSize` reads. */
+function png(width: number, height: number): Uint8Array {
+  const bytes = new Uint8Array(33);
+  const view = new DataView(bytes.buffer);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  view.setUint32(8, 13);
+  bytes.set([0x49, 0x48, 0x44, 0x52], 12);
+  view.setUint32(16, width);
+  view.setUint32(20, height);
+  return bytes;
+}
+
+/** A JPEG with an APP0 segment before its start-of-frame. */
+function jpeg(width: number, height: number): Uint8Array {
+  const bytes = new Uint8Array(2 + 18 + 19);
+  const view = new DataView(bytes.buffer);
+  view.setUint16(0, 0xffd8);
+  view.setUint16(2, 0xffe0);
+  view.setUint16(4, 16);
+  view.setUint16(20, 0xffc0);
+  view.setUint16(22, 17);
+  bytes[24] = 8;
+  view.setUint16(25, height);
+  view.setUint16(27, width);
+  return bytes;
+}
+
+/** A version with en-US (two screenshots and a preview for iPhone) and ja (none). */
+function screenshotsClient({
+  versionState = "PREPARE_FOR_SUBMISSION",
+}: {
+  versionState?: string;
+} = {}) {
+  const onVersion = {
+    appStoreVersionLocalization: {
+      data: { type: "appStoreVersionLocalizations", id: "VL1" },
+    },
+  };
+  const placement = (
+    id: string,
+    placementType: string,
+    asset: { type: string; id: string },
+  ) => ({
+    type: "appAssetLibraryPlacements",
+    id,
+    attributes: {
+      placementType,
+      placementGroup: IPHONE,
+      state: "PARENT_PREPARE_FOR_SUBMISSION",
+    },
+    relationships: {
+      [asset.type === "appAssetLibraryImages" ? "image" : "video"]: {
+        data: asset,
+      },
+      ...onVersion,
+    },
+  });
+  const placements = [
+    placement("P1", "APP_SCREENSHOT", {
+      type: "appAssetLibraryImages",
+      id: "I1",
+    }),
+    placement("P2", "APP_SCREENSHOT", {
+      type: "appAssetLibraryImages",
+      id: "I2",
+    }),
+    placement("P3", "APP_PREVIEW", { type: "appAssetLibraryVideos", id: "V1" }),
+  ];
+  const included = [
+    {
+      type: "appAssetLibraryImages",
+      id: "I1",
+      attributes: { fileName: "1.png", state: "PREPARE_FOR_SUBMISSION" },
+    },
+    {
+      type: "appAssetLibraryImages",
+      id: "I2",
+      attributes: { fileName: "2.png", state: "PREPARE_FOR_SUBMISSION" },
+    },
+    {
+      type: "appAssetLibraryVideos",
+      id: "V1",
+      attributes: { fileName: "preview.mp4", state: "UPLOAD_COMPLETE" },
+    },
+  ];
+  const localizations = [
+    {
+      type: "appStoreVersionLocalizations",
+      id: "VL1",
+      attributes: { locale: "en-US" },
+    },
+    {
+      type: "appStoreVersionLocalizations",
+      id: "VL2",
+      attributes: { locale: "ja" },
+    },
+  ];
+  const get = vi.fn((path: string, query: Record<string, unknown> = {}) => {
+    if (path === "/v1/appStoreVersions/V1") {
+      return Promise.resolve({
+        data: {
+          type: "appStoreVersions",
+          id: "V1",
+          attributes: {
+            versionString: "2.4",
+            platform: "IOS",
+            appVersionState: versionState,
+          },
+          relationships:
+            query.include === "app"
+              ? { app: { data: { type: "apps", id: "123" } } }
+              : undefined,
+        },
+      });
+    }
+    if (path === "/v1/appStoreVersions/V1/appStoreVersionLocalizations") {
+      const locale = query["filter[locale]"];
+      return Promise.resolve({
+        data: localizations.filter(
+          (item) => locale === undefined || item.attributes.locale === locale,
+        ),
+      });
+    }
+    if (path === "/v1/appStoreVersionLocalizations/VL1/placements") {
+      const group = query["filter[placementGroup]"];
+      return Promise.resolve({
+        data: group === undefined || group === IPHONE ? placements : [],
+        included,
+      });
+    }
+    if (path === "/v1/appStoreVersionLocalizations/VL2/placements") {
+      return Promise.resolve({ data: [] });
+    }
+    if (path === "/v1/appAssetLibraryRefData") {
+      return Promise.resolve({
+        data: [
+          {
+            type: "appAssetLibraryRefData",
+            id: "1",
+            attributes: {
+              imageSpecs: [
+                {
+                  specId: "S1",
+                  dimensions: {
+                    minWidth: 1290,
+                    maxWidth: 1290,
+                    minHeight: 2796,
+                    maxHeight: 2796,
+                  },
+                },
+                {
+                  specId: "S2",
+                  dimensions: {
+                    minWidth: 2064,
+                    maxWidth: 2064,
+                    minHeight: 2752,
+                    maxHeight: 2752,
+                  },
+                },
+                {
+                  specId: "S4",
+                  dimensions: {
+                    minWidth: 2048,
+                    maxWidth: 2048,
+                    minHeight: 2732,
+                    maxHeight: 2732,
+                  },
+                },
+              ],
+              placementTypes: [
+                {
+                  placementTypeId: "APP_SCREENSHOT",
+                  specMappings: [
+                    { placementGroupId: IPHONE, specs: ["S1"] },
+                    { placementGroupId: IPAD, specs: ["S2", "S4"] },
+                    { placementGroupId: "IPAD_PRO_129_LEGACY", specs: ["S4"] },
+                  ],
+                },
+                {
+                  placementTypeId: "APP_PREVIEW",
+                  specMappings: [{ placementGroupId: IPHONE, specs: ["S3"] }],
+                },
+              ],
+              features: [
+                {
+                  featureId: "APP_STORE_VERSIONS",
+                  placementPolicies: [
+                    {
+                      placementType: "APP_SCREENSHOT",
+                      groupLimits: [{ groupIds: [IPHONE, IPAD], maxCount: 10 }],
+                    },
+                    {
+                      placementType: "APP_PREVIEW",
+                      groupLimits: [{ groupIds: [IPHONE], maxCount: 3 }],
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      });
+    }
+    if (path === "/v1/apps/123/assetLibrary") {
+      return Promise.resolve({ data: { type: "appAssetLibraries", id: "L1" } });
+    }
+    if (path === "/v1/appAssetLibraryPlacements/P1") {
+      return Promise.resolve({ data: placements[0], included });
+    }
+    // A product page header, and a screenshot on a custom product page.
+    if (path === "/v1/appAssetLibraryPlacements/H1") {
+      return Promise.resolve({
+        data: {
+          ...placements[0],
+          id: "H1",
+          attributes: { placementType: "PRODUCT_PAGE_HEADER_ASSET" },
+        },
+        included,
+      });
+    }
+    if (path === "/v1/appAssetLibraryPlacements/C1") {
+      return Promise.resolve({
+        data: {
+          ...placements[0],
+          id: "C1",
+          relationships: {
+            appCustomProductPageLocalization: {
+              data: { type: "appCustomProductPageLocalizations", id: "CL1" },
+            },
+          },
+        },
+        included,
+      });
+    }
+    if (path === "/v1/appStoreVersionLocalizations/VL1") {
+      return Promise.resolve({
+        data: {
+          ...localizations[0],
+          relationships: {
+            appStoreVersion: { data: { type: "appStoreVersions", id: "V1" } },
+          },
+        },
+      });
+    }
+    return Promise.reject(new Error(`unexpected GET ${path}`));
+  });
+  let assets = 0;
+  const post = vi.fn((path: string, body: unknown) => {
+    if (
+      path === "/v1/appAssetLibraryImages" ||
+      path === "/v1/appAssetLibraryVideos"
+    ) {
+      assets += 1;
+      const size = (body as { data: { attributes: { fileSize: number } } }).data
+        .attributes.fileSize;
+      // Two parts, as Apple sends for a larger file.
+      const half = Math.ceil(size / 2);
+      return Promise.resolve({
+        data: {
+          type: path.slice(4),
+          id: `A${assets}`,
+          attributes: {
+            state: "AWAITING_UPLOAD",
+            uploadOperations: [
+              {
+                method: "PUT",
+                url: "https://upload.example/1",
+                offset: 0,
+                length: half,
+              },
+              {
+                method: "PUT",
+                url: "https://upload.example/2",
+                offset: half,
+                length: size - half,
+              },
+            ],
+          },
+        },
+      });
+    }
+    if (path === "/v1/appAssetLibraryPlacements") {
+      return Promise.resolve({
+        data: { type: "appAssetLibraryPlacements", id: `NP${assets}` },
+      });
+    }
+    if (path === "/v1/appAssetLibraryPlacementOrderingRequests") {
+      return Promise.resolve({ data: { id: "O1" } });
+    }
+    return Promise.reject(new Error(`unexpected POST ${path}`));
+  });
+  const client: AscClient = {
+    get: get as AscClient["get"],
+    post: post as AscClient["post"],
+    patch: vi.fn(() => Promise.resolve({ data: {} })) as AscClient["patch"],
+    delete: vi.fn(() => Promise.resolve()),
+    upload: vi.fn(() => Promise.resolve()),
+  };
+  return { client, provider: vi.fn<AscClientProvider>(() => client) };
+}
+
+describe("screenshots", () => {
+  it("should print each locale's screenshots and previews by group in order", async () => {
+    const { client, provider } = screenshotsClient();
+    const result = await run(["screenshots", "V1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/appStoreVersionLocalizations/VL1/placements",
+      expect.objectContaining({
+        "filter[placementType]": ["APP_SCREENSHOT", "APP_PREVIEW"],
+        sort: "placementGroupPosition",
+        include: ["image", "video"],
+      }),
+    );
+    const output = JSON.parse(result.stdout);
+    expect(output.localizations).toEqual([
+      {
+        id: "VL1",
+        locale: "en-US",
+        groups: [
+          {
+            placementType: "APP_SCREENSHOT",
+            placementGroup: IPHONE,
+            placements: [
+              {
+                id: "P1",
+                state: "PARENT_PREPARE_FOR_SUBMISSION",
+                fileName: "1.png",
+                assetState: "PREPARE_FOR_SUBMISSION",
+              },
+              {
+                id: "P2",
+                state: "PARENT_PREPARE_FOR_SUBMISSION",
+                fileName: "2.png",
+                assetState: "PREPARE_FOR_SUBMISSION",
+              },
+            ],
+          },
+          {
+            placementType: "APP_PREVIEW",
+            placementGroup: IPHONE,
+            placements: [
+              {
+                id: "P3",
+                state: "PARENT_PREPARE_FOR_SUBMISSION",
+                fileName: "preview.mp4",
+                assetState: "UPLOAD_COMPLETE",
+              },
+            ],
+          },
+        ],
+      },
+      { id: "VL2", locale: "ja", groups: [] },
+    ]);
+  });
+
+  it("should report a locale the version does not have", async () => {
+    const { provider } = screenshotsClient();
+    const result = await run(
+      ["screenshots", "V1", "--locale", "fr-FR"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[not_found]");
+  });
+});
+
+describe("screenshots upload", () => {
+  async function folder() {
+    const dir = await mkdtemp(join(tmpdir(), "asc-screenshots-"));
+    await mkdir(join(dir, "en-US"));
+    await mkdir(join(dir, "ja"));
+    await writeFile(join(dir, "en-US", "10-home.png"), png(1290, 2796));
+    await writeFile(join(dir, "en-US", "2-menu.jpg"), jpeg(2064, 2752));
+    await writeFile(join(dir, "en-US", `${IPHONE}-preview.mp4`), "video");
+    await writeFile(join(dir, "en-US", "notes.txt"), "ignored");
+    await writeFile(join(dir, "en-US", ".DS_Store"), "ignored");
+    // Landscape, read in either orientation.
+    await writeFile(join(dir, "ja", "1.png"), png(2796, 1290));
+    return dir;
+  }
+
+  it("should show where each file goes without --yes", async () => {
+    const { client, provider } = screenshotsClient();
+    const dir = await folder();
+    const result = await run(
+      ["screenshots", "upload", "V1", "--dir", dir],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("Dry run");
+    expect(client.post).not.toHaveBeenCalled();
+    expect(client.upload).not.toHaveBeenCalled();
+    const output = JSON.parse(result.stdout);
+    expect(output.files).toEqual([
+      {
+        locale: "en-US",
+        file: "2-menu.jpg",
+        placementType: "APP_SCREENSHOT",
+        placementGroup: IPAD,
+        fileSize: 39,
+      },
+      {
+        locale: "en-US",
+        file: "10-home.png",
+        placementType: "APP_SCREENSHOT",
+        placementGroup: IPHONE,
+        fileSize: 33,
+      },
+      {
+        locale: "en-US",
+        file: `${IPHONE}-preview.mp4`,
+        placementType: "APP_PREVIEW",
+        placementGroup: IPHONE,
+        fileSize: 5,
+      },
+      {
+        locale: "ja",
+        file: "1.png",
+        placementType: "APP_SCREENSHOT",
+        placementGroup: IPHONE,
+        fileSize: 33,
+      },
+    ]);
+    expect(output.skipped).toEqual(["en-US/notes.txt"]);
+  });
+
+  it("should reserve, send the parts, commit and place each file with --yes", async () => {
+    const { client, provider } = screenshotsClient();
+    const dir = await folder();
+    const result = await run(
+      ["screenshots", "upload", "V1", "--dir", dir, "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v1/appAssetLibraryImages", {
+      data: {
+        type: "appAssetLibraryImages",
+        attributes: {
+          fileName: "2-menu.jpg",
+          fileSize: 39,
+          category: "APP_SCREENSHOTS_AND_PREVIEWS",
+        },
+        relationships: {
+          assetLibrary: { data: { type: "appAssetLibraries", id: "L1" } },
+        },
+      },
+    });
+    // Every byte goes up once, in the parts Apple asked for.
+    const parts = vi.mocked(client.upload).mock.calls;
+    expect(parts).toHaveLength(8);
+    expect(parts[0]?.[0].url).toBe("https://upload.example/1");
+    expect(Buffer.concat(parts.slice(0, 2).map(([, part]) => part))).toEqual(
+      Buffer.from(jpeg(2064, 2752)),
+    );
+    expect(client.patch).toHaveBeenCalledWith("/v1/appAssetLibraryVideos/A3", {
+      data: {
+        type: "appAssetLibraryVideos",
+        id: "A3",
+        attributes: { uploaded: true },
+      },
+    });
+    expect(client.post).toHaveBeenCalledWith("/v1/appAssetLibraryPlacements", {
+      data: {
+        type: "appAssetLibraryPlacements",
+        attributes: { placementType: "APP_PREVIEW", placementGroup: IPHONE },
+        relationships: {
+          video: { data: { type: "appAssetLibraryVideos", id: "A3" } },
+          appStoreVersionLocalization: {
+            data: { type: "appStoreVersionLocalizations", id: "VL1" },
+          },
+        },
+      },
+    });
+    const output = JSON.parse(result.stdout);
+    expect(output.dryRun).toBe(false);
+    expect(
+      output.uploaded.map(
+        ({ assetId, placementId }: Record<string, string>) => [
+          assetId,
+          placementId,
+        ],
+      ),
+    ).toEqual([
+      ["A1", "NP1"],
+      ["A2", "NP2"],
+      ["A3", "NP3"],
+      ["A4", "NP4"],
+    ]);
+  });
+
+  it("should refuse a version that is no longer editable", async () => {
+    const { client, provider } = screenshotsClient({
+      versionState: "READY_FOR_DISTRIBUTION",
+    });
+    const result = await run(
+      ["screenshots", "upload", "V1", "--dir", await folder(), "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.post).not.toHaveBeenCalled();
+  });
+
+  it("should stop before writing on a file it cannot place", async () => {
+    const cases: [string, string | Uint8Array, string][] = [
+      ["en-US/odd.png", png(100, 100), "100x100"],
+      ["en-US/preview.mov", "video", "app preview"],
+      ["fr-FR/1.png", png(1290, 2796), "no fr-FR localization"],
+      ["en-US/ipad.png", png(2048, 2732), "fits more than one device group"],
+    ];
+    for (const [file, content, message] of cases) {
+      const { client, provider } = screenshotsClient();
+      const dir = await mkdtemp(join(tmpdir(), "asc-screenshots-"));
+      await mkdir(join(dir, file.split("/")[0] ?? ""));
+      await writeFile(join(dir, file), content);
+      const result = await run(
+        ["screenshots", "upload", "V1", "--dir", dir, "--yes"],
+        provider,
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(message);
+      expect(client.post).not.toHaveBeenCalled();
+    }
+  });
+
+  it("should stop before writing when a group would go past its limit", async () => {
+    const { client, provider } = screenshotsClient();
+    const dir = await mkdtemp(join(tmpdir(), "asc-screenshots-"));
+    await mkdir(join(dir, "en-US"));
+    // en-US already has one iPhone preview, and the limit is three.
+    for (const n of [1, 2, 3]) {
+      await writeFile(join(dir, "en-US", `${IPHONE}-${n}.mp4`), "video");
+    }
+    for (const yes of [[], ["--yes"]]) {
+      const result = await run(
+        ["screenshots", "upload", "V1", "--dir", dir, ...yes],
+        provider,
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("[invalid_input]");
+      expect(result.stderr).toContain(
+        "has 1 APP_PREVIEW and the folder adds 3",
+      );
+      expect(result.stderr).toContain("limit of 3");
+    }
+    expect(client.post).not.toHaveBeenCalled();
+  });
+
+  it("should say which files were placed when a later one fails", async () => {
+    const { client, provider } = screenshotsClient();
+    const post = vi.mocked(client.post);
+    const placeOrFail = post.getMockImplementation();
+    let placements = 0;
+    post.mockImplementation((path, body) => {
+      if (path === "/v1/appAssetLibraryPlacements" && ++placements === 2) {
+        return Promise.reject(
+          new AscApiError(409, {
+            errors: [{ code: "STATE_ERROR", detail: "Not now." }],
+          }),
+        );
+      }
+      return placeOrFail?.(path, body) as never;
+    });
+    const result = await run(
+      ["screenshots", "upload", "V1", "--dir", await folder(), "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("HTTP 409");
+    expect(result.stderr).toContain("Stopped at en-US/10-home.png");
+    expect(result.stderr).toContain("en-US/2-menu.jpg (NP1)");
+  });
+
+  it("should say a refused part is not about the key", async () => {
+    const { client, provider } = screenshotsClient();
+    vi.mocked(client.upload).mockRejectedValue(
+      new UnexpectedResponseError(
+        "Apple's storage refused part of the file with HTTP 403; the upload URL may have expired, so run the upload again.",
+      ),
+    );
+    const result = await run(
+      ["screenshots", "upload", "V1", "--dir", await folder(), "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[unexpected] Apple's storage refused");
+    expect(result.stderr).toContain("Nothing was placed before it.");
+    expect(result.stderr).not.toContain("role");
+  });
+
+  it("should require --dir", async () => {
+    const { client, provider } = screenshotsClient();
+    const result = await run(["screenshots", "upload", "V1"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("--dir");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("screenshots reorder", () => {
+  const args = [
+    "screenshots",
+    "reorder",
+    "V1",
+    "--locale",
+    "en-US",
+    "--group",
+    IPHONE,
+    "--placement",
+    "P2,P1",
+  ];
+
+  it("should show the current and new order without --yes", async () => {
+    const { client, provider } = screenshotsClient();
+    const result = await run(args, provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.post).not.toHaveBeenCalled();
+    const output = JSON.parse(result.stdout);
+    expect(output).toMatchObject({
+      dryRun: true,
+      locale: "en-US",
+      placementGroup: IPHONE,
+      placementType: "APP_SCREENSHOT",
+      current: [
+        { id: "P1", fileName: "1.png" },
+        { id: "P2", fileName: "2.png" },
+      ],
+      order: [
+        { id: "P2", fileName: "2.png" },
+        { id: "P1", fileName: "1.png" },
+      ],
+      changes: true,
+    });
+  });
+
+  it("should send an ordering request with --yes", async () => {
+    const { client, provider } = screenshotsClient();
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith(
+      "/v1/appAssetLibraryPlacementOrderingRequests",
+      {
+        data: {
+          type: "appAssetLibraryPlacementOrderingRequests",
+          attributes: { placementGroup: IPHONE },
+          relationships: {
+            orderedPlacements: {
+              data: [
+                { type: "appAssetLibraryPlacements", id: "P2" },
+                { type: "appAssetLibraryPlacements", id: "P1" },
+              ],
+            },
+            appStoreVersionLocalization: {
+              data: { type: "appStoreVersionLocalizations", id: "VL1" },
+            },
+          },
+        },
+      },
+    );
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      dryRun: false,
+      changed: true,
+    });
+  });
+
+  it("should not write an order that is unchanged", async () => {
+    const { client, provider } = screenshotsClient();
+    const result = await run(
+      [...args.slice(0, -1), "P1", "--placement", "P2", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).not.toHaveBeenCalled();
+  });
+
+  it("should refuse a version that is no longer editable", async () => {
+    const { client, provider } = screenshotsClient({
+      versionState: "READY_FOR_DISTRIBUTION",
+    });
+    const result = await run([...args, "--yes"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.post).not.toHaveBeenCalled();
+  });
+
+  it("should require every screenshot of the group and nothing else", async () => {
+    for (const ids of ["P1", "P1,P3", "P1,P9"]) {
+      const { client, provider } = screenshotsClient();
+      const result = await run([...args.slice(0, -1), ids, "--yes"], provider);
+      expect(result.exitCode).toBe(1);
+      expect(client.post).not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe("screenshots delete", () => {
+  it("should show each placement without --yes", async () => {
+    const { client, provider } = screenshotsClient();
+    const result = await run(["screenshots", "delete", "P1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.delete).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "delete",
+      placements: [
+        {
+          id: "P1",
+          placementType: "APP_SCREENSHOT",
+          placementGroup: IPHONE,
+          state: "PARENT_PREPARE_FOR_SUBMISSION",
+          fileName: "1.png",
+          assetState: "PREPARE_FOR_SUBMISSION",
+          versionId: "V1",
+          version: "2.4",
+          locale: "en-US",
+        },
+      ],
+    });
+  });
+
+  it("should refuse what is not a version's screenshot or preview", async () => {
+    for (const [id, message] of [
+      ["H1", "PRODUCT_PAGE_HEADER_ASSET"],
+      ["C1", "not on an App Store version localization"],
+    ]) {
+      const { client, provider } = screenshotsClient();
+      const result = await run(
+        ["screenshots", "delete", id ?? "", "--yes"],
+        provider,
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("[invalid_input]");
+      expect(result.stderr).toContain(message);
+      expect(client.delete).not.toHaveBeenCalled();
+    }
+  });
+
+  it("should refuse a placement on a version that is no longer editable", async () => {
+    const { client, provider } = screenshotsClient({
+      versionState: "READY_FOR_DISTRIBUTION",
+    });
+    const result = await run(
+      ["screenshots", "delete", "P1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.delete).not.toHaveBeenCalled();
+  });
+
+  it("should reject an id that is not one path segment", async () => {
+    const { client, provider } = screenshotsClient();
+    const result = await run(
+      ["screenshots", "delete", "a/b", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+
+  it("should delete the placement with --yes", async () => {
+    const { client, provider } = screenshotsClient();
+    const result = await run(
+      ["screenshots", "delete", "P1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.delete).toHaveBeenCalledWith(
+      "/v1/appAssetLibraryPlacements/P1",
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "delete",
+      deleted: ["P1"],
+    });
   });
 });
