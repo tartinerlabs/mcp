@@ -118,6 +118,28 @@ describe("apps", () => {
     );
   });
 
+  it("should round-trip an encoded cursor from links.next into the next request", async () => {
+    const first = respond({
+      data: [],
+      links: {
+        self: "x",
+        next: "https://api.appstoreconnect.apple.com/v1/apps?cursor=A%2BB%2F%3D",
+      },
+    });
+    const page = await run(["apps"], first.provider);
+    const { nextCursor } = JSON.parse(page.stdout);
+    expect(nextCursor).toBe("A+B/=");
+
+    vi.mocked(console.log).mockClear();
+    const second = respond(empty);
+    const result = await run(["apps", "--cursor", nextCursor], second.provider);
+    expect(result.exitCode).toBe(0);
+    expect(second.client.get).toHaveBeenCalledWith(
+      "/v1/apps",
+      expect.objectContaining({ cursor: "A+B/=" }),
+    );
+  });
+
   it("should refuse a URL as the cursor", async () => {
     const { client, provider } = respond(empty);
     const result = await run(
@@ -468,5 +490,32 @@ describe("errors", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("[invalid_input]");
     expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+describe.each([
+  ["apps", [], "/v1/apps"],
+  ["versions", ["1234567890"], "/v1/apps/1234567890/appStoreVersions"],
+  ["builds", ["1234567890"], "/v1/builds"],
+  ["reviews", ["1234567890"], "/v1/apps/1234567890/customerReviews"],
+])("%s --cursor", (command, args, path) => {
+  it("should pass the cursor through and print the next one", async () => {
+    const { client, provider } = respond({
+      data: [],
+      links: {
+        self: "x",
+        next: `https://api.appstoreconnect.apple.com${path}?cursor=NEXT`,
+      },
+    });
+    const result = await run([command, ...args, "--cursor", "AB"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      path,
+      expect.objectContaining({ cursor: "AB" }),
+    );
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      hasMore: true,
+      nextCursor: "NEXT",
+    });
   });
 });
