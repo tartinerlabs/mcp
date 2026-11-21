@@ -678,3 +678,209 @@ describe("builds wait", () => {
     );
   });
 });
+
+describe("status", () => {
+  const version = (
+    id: string,
+    platform: string,
+    versionString: string,
+    appVersionState: string,
+    createdDate: string,
+    extra: Record<string, unknown> = {},
+  ) => ({
+    type: "appStoreVersions",
+    id,
+    attributes: {
+      platform,
+      versionString,
+      appVersionState,
+      releaseType: "MANUAL",
+      earliestReleaseDate: null,
+      createdDate,
+    },
+    ...extra,
+  });
+
+  const versions = {
+    data: [
+      // Out of order on purpose: the endpoint has no sort parameter.
+      version("v1", "IOS", "1.0.0", "REPLACED_WITH_NEW_VERSION", "2026-01-01"),
+      version("v3", "IOS", "1.2.0", "WAITING_FOR_REVIEW", "2026-03-01", {
+        relationships: { build: { data: { type: "builds", id: "b3" } } },
+      }),
+      version("v2", "IOS", "1.1.0", "READY_FOR_DISTRIBUTION", "2026-02-01", {
+        relationships: {
+          build: { data: { type: "builds", id: "b2" } },
+          appStoreVersionPhasedRelease: {
+            data: { type: "appStoreVersionPhasedReleases", id: "p2" },
+          },
+        },
+      }),
+      version("m1", "MAC_OS", "1.0", "PREPARE_FOR_SUBMISSION", "2026-03-02"),
+    ],
+    included: [
+      { type: "builds", id: "b2", attributes: { version: "20" } },
+      { type: "builds", id: "b3", attributes: { version: "30" } },
+      {
+        type: "appStoreVersionPhasedReleases",
+        id: "p2",
+        attributes: { phasedReleaseState: "ACTIVE", currentDayNumber: 3 },
+      },
+    ],
+    links: { self: "x" },
+  };
+
+  /** Answers the versions request, and builds per platform filter. */
+  function router(buildsByPlatform: Record<string, unknown>) {
+    const client: AscClient = {
+      get: vi.fn((path: string, query?: Record<string, unknown>) =>
+        Promise.resolve(
+          path === "/v1/builds"
+            ? (buildsByPlatform[
+                String(query?.["filter[preReleaseVersion.platform]"])
+              ] ?? empty)
+            : versions,
+        ),
+      ) as AscClient["get"],
+    };
+    return { client, provider: vi.fn<AscClientProvider>(() => client) };
+  }
+
+  const iosBuild = {
+    data: [
+      {
+        type: "builds",
+        id: "b4",
+        attributes: { version: "31", processingState: "PROCESSING" },
+      },
+    ],
+    links: { self: "x" },
+  };
+
+  it("should summarise each platform", async () => {
+    const { client, provider } = router({ IOS: iosBuild });
+    const result = await run(["status", "1234567890"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/apps/1234567890/appStoreVersions",
+      expect.objectContaining({
+        include: "build,appStoreVersionPhasedRelease",
+        limit: 200,
+      }),
+    );
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/builds",
+      expect.objectContaining({
+        "filter[app]": "1234567890",
+        "filter[preReleaseVersion.platform]": "IOS",
+        sort: "-uploadedDate",
+        limit: 1,
+      }),
+    );
+    expect(client.get).toHaveBeenCalledTimes(3);
+
+    const { appId, platforms } = JSON.parse(result.stdout);
+    expect(appId).toBe("1234567890");
+    expect(Object.keys(platforms)).toEqual(["IOS", "MAC_OS"]);
+    expect(platforms.IOS.live).toMatchObject({
+      id: "v2",
+      version: "1.1.0",
+      state: "READY_FOR_DISTRIBUTION",
+      build: "20",
+      phasedRelease: { phasedReleaseState: "ACTIVE", currentDayNumber: 3 },
+    });
+    expect(platforms.IOS.inProgress).toMatchObject({
+      id: "v3",
+      version: "1.2.0",
+      state: "WAITING_FOR_REVIEW",
+      build: "30",
+      phasedRelease: null,
+    });
+    expect(platforms.IOS.latestBuild).toMatchObject({
+      id: "b4",
+      version: "31",
+      processingState: "PROCESSING",
+    });
+    expect(platforms.MAC_OS).toMatchObject({
+      live: null,
+      inProgress: { id: "m1", state: "PREPARE_FOR_SUBMISSION" },
+      latestBuild: null,
+    });
+  });
+
+  it("should not report a version older than the live one as in progress", async () => {
+    const { provider } = respond({
+      data: [
+        version("v0", "IOS", "0.9.0", "DEVELOPER_REJECTED", "2025-12-01"),
+        version("v2", "IOS", "1.1.0", "READY_FOR_DISTRIBUTION", "2026-02-01"),
+      ],
+      links: { self: "x" },
+    });
+    const result = await run(["status", "1234567890"], provider);
+    const { IOS } = JSON.parse(result.stdout).platforms;
+    expect(IOS.live.id).toBe("v2");
+    expect(IOS.inProgress).toBeNull();
+  });
+
+  it("should order versions by instant across UTC offsets", async () => {
+    // 01:10-08:00 (09:10Z) is 40 minutes after 01:30-07:00 (08:30Z), though it sorts earlier as text.
+    const { provider } = respond({
+      data: [
+        version(
+          "a",
+          "IOS",
+          "2.0",
+          "READY_FOR_DISTRIBUTION",
+          "2026-11-01T01:30:00-07:00",
+        ),
+        version(
+          "b",
+          "IOS",
+          "2.1",
+          "WAITING_FOR_REVIEW",
+          "2026-11-01T01:10:00-08:00",
+        ),
+      ],
+      links: { self: "x" },
+    });
+    const result = await run(["status", "1234567890"], provider);
+    const { IOS } = JSON.parse(result.stdout).platforms;
+    expect(IOS.live.id).toBe("a");
+    expect(IOS.inProgress.id).toBe("b");
+  });
+
+  it("should limit to one platform with --platform", async () => {
+    const { client, provider } = router({});
+    const result = await run(
+      ["status", "1234567890", "--platform", "MAC_OS"],
+      provider,
+    );
+    expect(Object.keys(JSON.parse(result.stdout).platforms)).toEqual([
+      "MAC_OS",
+    ]);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/apps/1234567890/appStoreVersions",
+      expect.objectContaining({ "filter[platform]": "MAC_OS" }),
+    );
+    expect(client.get).toHaveBeenCalledTimes(2);
+  });
+
+  it("should report an app with no versions as no platforms", async () => {
+    const { provider } = respond(empty);
+    const result = await run(["status", "1234567890"], provider);
+    expect(JSON.parse(result.stdout)).toEqual({
+      appId: "1234567890",
+      platforms: {},
+    });
+  });
+
+  it("should refuse an unknown platform", async () => {
+    const { client, provider } = router({});
+    const result = await run(
+      ["status", "1234567890", "--platform", "ANDROID"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
