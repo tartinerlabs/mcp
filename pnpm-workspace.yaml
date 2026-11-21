@@ -30,3 +30,7 @@ allowBuilds:
   esbuild: false
 
 savePrefix: ""
+
+permissions:
+  drizzle-kit:
+    skills: true
