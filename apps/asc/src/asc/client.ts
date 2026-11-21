@@ -37,6 +37,8 @@ export interface AscClient {
   get<T>(path: string, query?: AscQuery): Promise<T>;
   /** Sends a JSON:API body; resolves to the response document. */
   post<T>(path: string, body: unknown): Promise<T>;
+  /** Updates a resource with a JSON:API body; resolves to the updated document. */
+  patch<T>(path: string, body: unknown): Promise<T>;
   /** Resolves when Apple answers 2xx (usually 204, with no body). */
   delete(path: string): Promise<void>;
 }
@@ -79,7 +81,7 @@ export async function createAscClient(
 
   /** Signs a fresh token, sends the request and returns the parsed JSON body (undefined when empty). */
   async function request(
-    method: "GET" | "POST" | "DELETE",
+    method: "GET" | "POST" | "PATCH" | "DELETE",
     url: URL,
     body?: unknown,
   ): Promise<unknown> {
@@ -109,7 +111,7 @@ export async function createAscClient(
     return data;
   }
 
-  /** A JSON body is required for GET and POST. */
+  /** A JSON body is required for GET, POST and PATCH. */
   function json<T>(data: unknown): T {
     if (data === undefined) {
       throw new UnexpectedResponseError(
@@ -133,6 +135,9 @@ export async function createAscClient(
     },
     async post<T>(path: string, body: unknown): Promise<T> {
       return json<T>(await request("POST", new URL(path, ASC_API), body));
+    },
+    async patch<T>(path: string, body: unknown): Promise<T> {
+      return json<T>(await request("PATCH", new URL(path, ASC_API), body));
     },
     async delete(path: string): Promise<void> {
       await request("DELETE", new URL(path, ASC_API));

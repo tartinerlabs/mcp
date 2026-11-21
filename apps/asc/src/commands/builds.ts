@@ -23,6 +23,8 @@ interface BuildAttributes {
   minOsVersion?: string;
   processingState?: string;
   buildAudienceType?: string | null;
+  /** The export compliance answer; null until someone answers it. */
+  usesNonExemptEncryption?: boolean | null;
 }
 
 interface PreReleaseVersionAttributes {
@@ -45,29 +47,35 @@ export const buildsInput = z.object({
   cursor: cursorSchema,
 });
 
-/** Newest upload first, with the marketing version and platform from the pre-release version. */
+/** The build fields `shapeBuild` reads, with the marketing version and platform from the pre-release version. */
+const BUILD_QUERY = {
+  include: "preReleaseVersion",
+  "fields[builds]": [
+    "version",
+    "uploadedDate",
+    "expirationDate",
+    "expired",
+    "minOsVersion",
+    "processingState",
+    "buildAudienceType",
+    "usesNonExemptEncryption",
+    "preReleaseVersion",
+  ],
+  "fields[preReleaseVersions]": ["version", "platform"],
+} satisfies AscQuery;
+
+/** Newest upload first. */
 export function buildsQuery(appId: string, buildNumber?: string): AscQuery {
   return {
     "filter[app]": appId,
     "filter[version]": buildNumber,
     sort: "-uploadedDate",
-    include: "preReleaseVersion",
-    "fields[builds]": [
-      "version",
-      "uploadedDate",
-      "expirationDate",
-      "expired",
-      "minOsVersion",
-      "processingState",
-      "buildAudienceType",
-      "preReleaseVersion",
-    ],
-    "fields[preReleaseVersions]": ["version", "platform"],
+    ...BUILD_QUERY,
   };
 }
 
 export function shapeBuild(
-  response: BuildsDocument,
+  response: Pick<AscDocument<unknown>, "included">,
   build: AscResource<BuildAttributes>,
 ) {
   const preRelease = related<PreReleaseVersionAttributes>(
@@ -86,6 +94,7 @@ export function shapeBuild(
     expired: build.attributes?.expired,
     buildAudienceType: build.attributes?.buildAudienceType,
     minOsVersion: build.attributes?.minOsVersion,
+    usesNonExemptEncryption: build.attributes?.usesNonExemptEncryption,
   };
 }
 
@@ -176,4 +185,68 @@ export async function waitForBuild(
     }
     await sleep(delayMs);
   }
+}
+
+/** Build IDs are opaque; letters, digits and hyphens keep them to one path segment. */
+const buildIdSchema = z
+  .string()
+  .trim()
+  .regex(
+    /^[A-Za-z0-9-]{1,100}$/,
+    "Must be a build id from the builds command.",
+  );
+
+export const complianceInput = z.object({
+  buildId: buildIdSchema,
+  usesNonExemptEncryption: z.boolean({
+    error: "Give --no-encryption or --encryption.",
+  }),
+  yes: z.boolean().default(false),
+});
+
+interface BuildDocument {
+  data: AscResource<BuildAttributes>;
+  included?: AscResource[];
+}
+
+/**
+ * Answers a build's export compliance question: whether it uses non-exempt
+ * encryption. Without `yes`, only shows the build and what would change.
+ */
+export async function setBuildCompliance(
+  client: AscClient,
+  input: z.output<typeof complianceInput>,
+) {
+  const document = await client.get<BuildDocument>(
+    `/v1/builds/${input.buildId}`,
+    BUILD_QUERY,
+  );
+  const build = shapeBuild(document, document.data);
+  const changes =
+    build.usesNonExemptEncryption !== input.usesNonExemptEncryption;
+  if (!input.yes) {
+    return {
+      dryRun: true,
+      action: "compliance",
+      build,
+      usesNonExemptEncryption: input.usesNonExemptEncryption,
+      changes,
+    };
+  }
+  if (changes) {
+    await client.patch(`/v1/builds/${input.buildId}`, {
+      data: {
+        type: "builds",
+        id: input.buildId,
+        attributes: { usesNonExemptEncryption: input.usesNonExemptEncryption },
+      },
+    });
+  }
+  return {
+    dryRun: false,
+    action: "compliance",
+    buildId: input.buildId,
+    usesNonExemptEncryption: input.usesNonExemptEncryption,
+    changed: changes,
+  };
 }

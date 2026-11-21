@@ -341,6 +341,24 @@ describe("createAscClient writes", () => {
     expect(sentToken(fetch)).toMatch(/^[\w-]+\.[\w-]+\.[\w-]+$/);
   });
 
+  it("should PATCH a JSON body and return the document", async () => {
+    const fetch = stubFetch(
+      Response.json({ data: { type: "builds", id: "b1" } }),
+    );
+    const client = await clientFor(key("TEAMKEY001", ISSUER), fetch);
+    const body = { data: { type: "builds", id: "b1" } };
+    await expect(client.patch("/v1/builds/b1", body)).resolves.toEqual({
+      data: { type: "builds", id: "b1" },
+    });
+    const [url, init] = fetch.mock.calls[0] as [URL, RequestInit];
+    expect(String(url)).toBe(
+      "https://api.appstoreconnect.apple.com/v1/builds/b1",
+    );
+    expect(init.method).toBe("PATCH");
+    expect(init.body).toBe(JSON.stringify(body));
+    expect(init.headers).toMatchObject({ "content-type": "application/json" });
+  });
+
   it("should DELETE and accept a 204 with no body", async () => {
     const fetch = stubFetch(new Response(null, { status: 204 }));
     const client = await clientFor(key("TEAMKEY001", ISSUER), fetch);
