@@ -1,3 +1,9 @@
+## [0.18.1](https://github.com/tartinerlabs/mcp/compare/v0.18.0...v0.18.1) (2026-11-21)
+
+### Bug Fixes
+
+* name pnpm skills dir for clean installs ([c11044f](https://github.com/tartinerlabs/mcp/commit/c11044f811c2b971eb512f003e3796dcec823c22))
+
 ## [0.18.0](https://github.com/tartinerlabs/mcp/compare/v0.17.0...v0.18.0) (2026-11-21)
 
 ### Features
