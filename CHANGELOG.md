@@ -1,3 +1,9 @@
+## [0.21.0](https://github.com/tartinerlabs/mcp/compare/v0.20.0...v0.21.0) (2026-11-21)
+
+### Features
+
+* **asc:** write TestFlight notes, testers and group builds ([e632fa7](https://github.com/tartinerlabs/mcp/commit/e632fa7659246ad5abbee7bd04c10214bc1bb8e5))
+
 ## [0.20.0](https://github.com/tartinerlabs/mcp/compare/v0.19.0...v0.20.0) (2026-11-21)
 
 ### Features
