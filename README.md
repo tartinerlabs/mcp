@@ -4,7 +4,7 @@ An unofficial [Model Context Protocol](https://modelcontextprotocol.io) (MCP) se
 
 The server runs as a stateless Streamable HTTP endpoint on Vercel. MCP clients connect with nothing but its URL, `https://<your-domain>/mcp`: on first use the client opens a browser, you sign in with Google and approve the client, and every tool call then runs as **your** Google account. Nothing needs to run on your machine.
 
-This repository is a pnpm workspace: the Search Console server lives in `apps/gsc`, a second server for PageSpeed Insights and the Chrome UX Report lives in `apps/pagespeed` (see [PageSpeed Insights server](#pagespeed-insights-server)), and a third for read-only Bing Webmaster Tools access lives in `apps/bing` (see [Bing Webmaster Tools server](#bing-webmaster-tools-server)). Two command-line tools run on your own machine: IndexNow URL submission in `apps/index-now` (see [IndexNow CLI](#indexnow-cli)) and read-only App Store Connect access in `apps/asc` (see [App Store Connect CLI](#app-store-connect-cli)). Shared auth and HTTP code is in `packages/core`.
+This repository is a pnpm workspace: the Search Console server lives in `apps/gsc`, a second server for PageSpeed Insights and the Chrome UX Report lives in `apps/pagespeed` (see [PageSpeed Insights server](#pagespeed-insights-server)), and a third for read-only Bing Webmaster Tools access lives in `apps/bing` (see [Bing Webmaster Tools server](#bing-webmaster-tools-server)). Three command-line tools run on your own machine: IndexNow URL submission in `apps/index-now` (see [IndexNow CLI](#indexnow-cli)), App Store Connect access in `apps/asc` (see [App Store Connect CLI](#app-store-connect-cli)) and App Store keyword and rank checks in `apps/aso` (see [ASO CLI](#aso-cli)). Shared auth and HTTP code is in `packages/core`.
 
 > This project is not affiliated with, endorsed by or supported by Google. "Google" and "Search Console" are trademarks of Google LLC.
 
@@ -230,6 +230,27 @@ The result is printed as JSON on stdout. Retry progress and errors go to stderr,
 pnpm --filter @tartinerlabs/index-now-mcp build
 node apps/index-now/dist/index.js verify https://example.com --key <key>
 node apps/index-now/dist/index.js submit https://example.com/new-page --key <key>
+```
+
+## ASO CLI
+
+`apps/aso` is a command-line tool, not an MCP server. It checks keyword fields, tracks where an app ranks in App Store search and watches other apps' public listings. It needs no key: searches and lookups use Apple's public iTunes Search and Lookup APIs.
+
+| Command | What it does |
+| --- | --- |
+| `keywords lint --keywords <text>` | Checks a comma-separated keyword field against App Store Connect's limits (100 bytes, each keyword at least 3 characters) and Apple's keyword guidance: spaces after commas, repeated words, singular and plural pairs, words already in `--name`, `--subtitle` or `--developer`, "app", filler words and `#`/`@`. Makes no requests. Exits with code 1 when a limit is broken. Competitor, trademark and category names are not checked. |
+| `ranks check <terms...> --app-id <id>` | Searches up to 50 phrases in one storefront (`--country`, default `us`) and reports the app's position in the top 200 and the top 3 apps. With `--history <file>` it compares with the last run and appends this one as JSON Lines. |
+| `competitors diff <app-ids...> --snapshot <file>` | Looks up up to 200 apps in one storefront and reports what changed since the snapshot was last written (name, developer, version, release notes, description, genre, price, rating, rating count, screenshot count), then updates it. The first run only records. Use one snapshot file per country. |
+
+It runs on your own machine, from a checkout of this repository. Apple allows about 20 search or lookup requests a minute per IP, which shared cloud IPs exhaust, so requests are spaced 3 seconds apart and a rate limit (HTTP 403 or 429), 5xx or network error is retried after 60 and then 120 seconds. Ranks come from the public search API and can differ from what a signed-in device shows. Subtitles and keyword fields of other apps are not public, so they cannot be compared.
+
+The result is printed as JSON on stdout. Retry progress and errors go to stderr, and a failure exits with code 1. Build it, then run it:
+
+```sh
+pnpm --filter @tartinerlabs/aso build
+node apps/aso/dist/index.js keywords lint --keywords "habit,tracker,routine" --name "Daily"
+node apps/aso/dist/index.js ranks check "habit tracker" streaks --app-id <id> --history ranks-us.jsonl
+node apps/aso/dist/index.js competitors diff <id> <id> --snapshot competitors-us.json
 ```
 
 ## App Store Connect CLI
