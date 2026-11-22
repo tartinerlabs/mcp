@@ -1,0 +1,35 @@
+{
+  "name": "@tartinerlabs/aso",
+  "version": "0.22.0",
+  "private": true,
+  "description": "Unofficial command-line tool for App Store keyword checks, rank tracking and competitor listing changes.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tartinerlabs/mcp.git",
+    "directory": "apps/aso"
+  },
+  "bin": {
+    "aso": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "commander": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}

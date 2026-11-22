@@ -7,7 +7,7 @@ export default {
     "scope-enum": [
       RuleConfigSeverity.Error,
       "always",
-      ["asc", "core", "gsc", "index-now", "pagespeed"],
+      ["asc", "aso", "core", "gsc", "index-now", "pagespeed"],
     ],
     "type-enum": [
       RuleConfigSeverity.Error,
