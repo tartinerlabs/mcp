@@ -1,3 +1,9 @@
+## [0.23.0](https://github.com/tartinerlabs/mcp/compare/v0.22.0...v0.23.0) (2026-11-22)
+
+### Features
+
+* **aso:** add keyword lint, rank and competitor CLI ([4224559](https://github.com/tartinerlabs/mcp/commit/4224559f55c6429a2b2ffbcdbe139b46db12a72f))
+
 ## [0.22.0](https://github.com/tartinerlabs/mcp/compare/v0.21.0...v0.22.0) (2026-11-21)
 
 ### Features
