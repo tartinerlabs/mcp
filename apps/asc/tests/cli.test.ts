@@ -5961,3 +5961,720 @@ describe("age-rating set", () => {
     expect(client.patch).not.toHaveBeenCalled();
   });
 });
+
+describe("metrics", () => {
+  const xcodeMetrics = {
+    version: "1.0",
+    insights: {
+      regressions: [
+        {
+          metricCategory: "HANG",
+          metric: "hangRate",
+          latestVersion: "1.2",
+          summaryString: "Hang rate went up 40%",
+          referenceVersions: "1.0, 1.1",
+          highImpact: true,
+          populations: [
+            {
+              percentile: "p50",
+              device: "all",
+              latestVersionValue: 1.4,
+              referenceAverageValue: 1,
+              deltaPercentage: 40,
+              summaryString: "x",
+            },
+          ],
+        },
+      ],
+    },
+    productData: [
+      {
+        platform: "iOS",
+        metricCategories: [
+          {
+            identifier: "HANG",
+            metrics: [
+              {
+                identifier: "hangRate",
+                goalKeys: [{ goalKey: "x", lowerBound: 0, upperBound: 1 }],
+                unit: { identifier: "s/hr", displayName: "seconds per hour" },
+                datasets: [
+                  {
+                    filterCriteria: {
+                      percentile: "p50",
+                      device: "iPhone15,2",
+                      deviceMarketingName: "iPhone 14 Pro",
+                    },
+                    points: [
+                      {
+                        version: "1.1",
+                        value: 1,
+                        errorMargin: 0.1,
+                        percentageBreakdown: { value: 1, subSystemLabel: "x" },
+                      },
+                      { version: "1.2", value: 1.4, goal: "BAD" },
+                    ],
+                    recommendedMetricGoal: { value: 0.5, detail: "x" },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+
+  it("should read an app's metrics with Apple's media type and summarise them", async () => {
+    const { client, provider } = respond(xcodeMetrics);
+    const result = await run(
+      [
+        "metrics",
+        "1234567890",
+        "--type",
+        "HANG,LAUNCH",
+        "--device",
+        "iPhone15,2",
+      ],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/apps/1234567890/perfPowerMetrics",
+      {
+        "filter[metricType]": ["HANG", "LAUNCH"],
+        "filter[deviceType]": "iPhone15,2",
+      },
+      { accept: "application/vnd.apple.xcode-metrics+json" },
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      appId: "1234567890",
+      insights: {
+        regressions: [
+          {
+            category: "HANG",
+            metric: "hangRate",
+            summary: "Hang rate went up 40%",
+            latestVersion: "1.2",
+            referenceVersions: "1.0, 1.1",
+            highImpact: true,
+            populations: [
+              {
+                percentile: "p50",
+                device: "all",
+                latestVersionValue: 1.4,
+                referenceAverageValue: 1,
+                deltaPercentage: 40,
+              },
+            ],
+          },
+        ],
+        trendingUp: [],
+      },
+      metrics: [
+        {
+          platform: "iOS",
+          category: "HANG",
+          metric: "hangRate",
+          unit: "seconds per hour",
+          datasets: [
+            {
+              percentile: "p50",
+              device: "iPhone 14 Pro",
+              points: [
+                { version: "1.1", value: 1 },
+                { version: "1.2", value: 1.4, goal: "BAD" },
+              ],
+              recommendedGoal: 0.5,
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("should read one build's metrics with --build", async () => {
+    const { client, provider } = respond({});
+    const result = await run(["metrics", "--build", "b-1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/builds/b-1/perfPowerMetrics",
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      buildId: "b-1",
+      insights: { regressions: [], trendingUp: [] },
+      metrics: [],
+    });
+  });
+
+  it.each([[["metrics"]], [["metrics", "1234567890", "--build", "b-1"]]])(
+    "should need exactly one of an app or a build: %j",
+    async (args) => {
+      const { client, provider } = respond({});
+      const result = await run(args, provider);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("[invalid_input]");
+      expect(client.get).not.toHaveBeenCalled();
+    },
+  );
+
+  it("should reject an unknown metric type", async () => {
+    const { client, provider } = respond({});
+    const result = await run(["metrics", "1", "--type", "CPU"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("diagnostics", () => {
+  it("should list a build's signatures of one type", async () => {
+    const { client, provider } = respond({
+      data: [
+        {
+          type: "diagnosticSignatures",
+          id: "sig-1",
+          attributes: {
+            diagnosticType: "HANGS",
+            signature: "main thread blocked in -[Foo load]",
+            weight: 0.62,
+            insight: { insightType: "TREND", direction: "UP" },
+          },
+        },
+      ],
+      links: { self: "x" },
+      meta: { paging: { total: 1, limit: 10 } },
+    });
+    const result = await run(
+      ["diagnostics", "b-1", "--type", "HANGS", "--limit", "10"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/builds/b-1/diagnosticSignatures",
+      expect.objectContaining({
+        "filter[diagnosticType]": "HANGS",
+        limit: 10,
+      }),
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      signatures: [
+        {
+          id: "sig-1",
+          type: "HANGS",
+          signature: "main thread blocked in -[Foo load]",
+          weight: 0.62,
+          insight: { insightType: "TREND", direction: "UP" },
+        },
+      ],
+      total: 1,
+      hasMore: false,
+    });
+  });
+
+  it("should summarise a signature's logs as the heaviest path of each call stack", async () => {
+    const frame = (
+      symbolName: string,
+      sampleCount: number,
+      subFrames: unknown[] = [],
+      extra: Record<string, unknown> = {},
+    ) => ({ binaryName: "App", symbolName, sampleCount, subFrames, ...extra });
+    const { client, provider } = respond({
+      version: "1.0",
+      productData: [
+        {
+          signatureId: "sig-1",
+          diagnosticInsights: [
+            {
+              insightsCategory: "HANG",
+              insightsString: "Avoid file I/O on the main thread",
+              insightsURL: "https://developer.apple.com/x",
+            },
+          ],
+          diagnosticLogs: [
+            {
+              diagnosticMetaData: {
+                event: "hang",
+                appVersion: "1.2",
+                buildVersion: "42",
+                osVersion: "iOS 26.1",
+                deviceType: "iPhone15,2",
+                bundleId: "com.example",
+              },
+              callStackTree: [
+                {
+                  callStackPerThread: true,
+                  callStacks: [
+                    { callStackRootFrames: [frame("idle", 9)] },
+                    {
+                      callStackRootFrames: [
+                        frame("main", 10, [
+                          frame("cold", 2),
+                          frame("-[Foo load]", 8, [], {
+                            isBlameFrame: true,
+                            fileName: "Foo.m",
+                            lineNumber: "12",
+                          }),
+                        ]),
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const result = await run(
+      ["diagnostics", "logs", "sig-1", "--limit", "5"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/diagnosticSignatures/sig-1/logs",
+      { limit: 5 },
+      { accept: "application/vnd.apple.diagnostic-logs+json" },
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      signatureId: "sig-1",
+      insights: [
+        {
+          category: "HANG",
+          summary: "Avoid file I/O on the main thread",
+          url: "https://developer.apple.com/x",
+        },
+      ],
+      logs: [
+        {
+          event: "hang",
+          appVersion: "1.2",
+          buildVersion: "42",
+          osVersion: "iOS 26.1",
+          deviceType: "iPhone15,2",
+          callStacks: [
+            {
+              frames: [
+                { binary: "App", symbol: "main", samples: 10 },
+                {
+                  binary: "App",
+                  symbol: "-[Foo load]",
+                  file: "Foo.m:12",
+                  samples: 8,
+                  blame: true,
+                },
+              ],
+            },
+            { frames: [{ binary: "App", symbol: "idle", samples: 9 }] },
+          ],
+          omittedCallStacks: 0,
+        },
+      ],
+    });
+  });
+});
+
+describe("xcode-cloud", () => {
+  /** A client whose `get` answers by path; an unknown path fails the test. */
+  function routes(table: Record<string, unknown | unknown[]>) {
+    const calls = new Map<string, number>();
+    const client: AscClient = {
+      ...noWrites(),
+      get: vi.fn((path: string) => {
+        if (!(path in table)) {
+          return Promise.reject(new Error(`unexpected GET ${path}`));
+        }
+        const answer = table[path];
+        const count = calls.get(path) ?? 0;
+        calls.set(path, count + 1);
+        return Promise.resolve(Array.isArray(answer) ? answer[count] : answer);
+      }) as AscClient["get"],
+    };
+    return { client, provider: vi.fn<AscClientProvider>(() => client) };
+  }
+
+  it("should list products with their app", async () => {
+    const { client, provider } = respond({
+      data: [
+        {
+          type: "ciProducts",
+          id: "p-1",
+          attributes: {
+            name: "Demo",
+            productType: "APP",
+            createdDate: "2026-01-01T00:00:00Z",
+          },
+          relationships: { app: { data: { type: "apps", id: "1234567890" } } },
+        },
+      ],
+      included: [
+        {
+          type: "apps",
+          id: "1234567890",
+          attributes: { name: "Demo", bundleId: "com.example.demo" },
+        },
+      ],
+      links: { self: "x" },
+    });
+    const result = await run(
+      ["xcode-cloud", "products", "--app", "1234567890"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/ciProducts",
+      expect.objectContaining({ "filter[app]": "1234567890", include: "app" }),
+    );
+    expect(JSON.parse(result.stdout).products).toEqual([
+      {
+        id: "p-1",
+        name: "Demo",
+        type: "APP",
+        createdDate: "2026-01-01T00:00:00Z",
+        app: { id: "1234567890", name: "Demo", bundleId: "com.example.demo" },
+      },
+    ]);
+  });
+
+  it("should list a product's workflows with their repository and actions", async () => {
+    const { client, provider } = respond({
+      data: [
+        {
+          type: "ciWorkflows",
+          id: "w-1",
+          attributes: {
+            name: "PR checks",
+            isEnabled: true,
+            actions: [
+              {
+                name: "Test",
+                actionType: "TEST",
+                platform: "IOS",
+                scheme: "Demo",
+                destination: "x",
+              },
+            ],
+          },
+          relationships: {
+            repository: { data: { type: "scmRepositories", id: "r-1" } },
+          },
+        },
+      ],
+      included: [
+        {
+          type: "scmRepositories",
+          id: "r-1",
+          attributes: { ownerName: "acme", repositoryName: "demo" },
+        },
+      ],
+      links: { self: "x" },
+    });
+    const result = await run(["xcode-cloud", "workflows", "p-1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/ciProducts/p-1/workflows",
+      expect.objectContaining({ include: "repository" }),
+    );
+    expect(JSON.parse(result.stdout).workflows).toEqual([
+      {
+        id: "w-1",
+        name: "PR checks",
+        isEnabled: true,
+        repository: "acme/demo",
+        actions: [
+          { name: "Test", type: "TEST", platform: "IOS", scheme: "Demo" },
+        ],
+      },
+    ]);
+  });
+
+  it("should list a workflow's runs newest first and filter the page by branch", async () => {
+    const runResource = (id: string, number: number, branch: string) => ({
+      type: "ciBuildRuns",
+      id,
+      attributes: {
+        number,
+        executionProgress: "COMPLETE",
+        completionStatus: number === 7 ? "FAILED" : "SUCCEEDED",
+        startReason: "GIT_REF_CHANGE",
+        sourceCommit: {
+          commitSha: "abc",
+          message: "Fix",
+          author: { displayName: "x" },
+        },
+        issueCounts: { errors: number === 7 ? 1 : 0 },
+      },
+      relationships: {
+        workflow: { data: { type: "ciWorkflows", id: "w-1" } },
+        sourceBranchOrTag: { data: { type: "scmGitReferences", id: branch } },
+        pullRequest: { data: null },
+      },
+    });
+    const { client, provider } = respond({
+      data: [
+        runResource("run-7", 7, "g-main"),
+        runResource("run-6", 6, "g-dev"),
+      ],
+      included: [
+        { type: "ciWorkflows", id: "w-1", attributes: { name: "CI" } },
+        {
+          type: "scmGitReferences",
+          id: "g-main",
+          attributes: { name: "main", kind: "BRANCH" },
+        },
+        {
+          type: "scmGitReferences",
+          id: "g-dev",
+          attributes: { name: "dev", kind: "BRANCH" },
+        },
+      ],
+      links: { self: "x" },
+    });
+    const result = await run(
+      ["xcode-cloud", "runs", "w-1", "--branch", "main"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/ciWorkflows/w-1/buildRuns",
+      expect.objectContaining({ sort: "-number", limit: 50 }),
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      runs: [
+        {
+          id: "run-7",
+          number: 7,
+          workflow: "CI",
+          executionProgress: "COMPLETE",
+          completionStatus: "FAILED",
+          startReason: "GIT_REF_CHANGE",
+          sourceBranchOrTag: "main",
+          commit: { sha: "abc", message: "Fix" },
+          issueCounts: { errors: 1 },
+        },
+      ],
+      hasMore: false,
+    });
+  });
+
+  it("should show a failed run's issues and failed tests", async () => {
+    const { client, provider } = routes({
+      "/v1/ciBuildRuns/run-7": {
+        data: {
+          type: "ciBuildRuns",
+          id: "run-7",
+          attributes: {
+            number: 7,
+            executionProgress: "COMPLETE",
+            completionStatus: "FAILED",
+          },
+        },
+      },
+      "/v1/ciBuildRuns/run-7/actions": {
+        data: [
+          {
+            type: "ciBuildActions",
+            id: "a-build",
+            attributes: {
+              name: "Build",
+              actionType: "BUILD",
+              completionStatus: "SUCCEEDED",
+              issueCounts: { errors: 0, warnings: 0 },
+            },
+          },
+          {
+            type: "ciBuildActions",
+            id: "a-test",
+            attributes: {
+              name: "Test",
+              actionType: "TEST",
+              completionStatus: "FAILED",
+              issueCounts: { testFailures: 1 },
+            },
+          },
+        ],
+        links: { self: "x" },
+      },
+      "/v1/ciBuildActions/a-test/issues": {
+        data: [
+          {
+            type: "ciIssues",
+            id: "i-1",
+            attributes: {
+              issueType: "TEST_FAILURE",
+              message: "XCTAssertEqual failed",
+              fileSource: { path: "Tests/FooTests.swift", lineNumber: 12 },
+              category: "Test",
+            },
+          },
+        ],
+        links: { self: "x" },
+      },
+      "/v1/ciBuildActions/a-test/testResults": [
+        {
+          data: [
+            {
+              type: "ciTestResults",
+              id: "t-1",
+              attributes: {
+                className: "FooTests",
+                name: "testOk()",
+                status: "SUCCESS",
+              },
+            },
+          ],
+          links: {
+            self: "x",
+            next: "https://api.appstoreconnect.apple.com/v1/ciBuildActions/a-test/testResults?cursor=P2",
+          },
+        },
+        {
+          data: [
+            {
+              type: "ciTestResults",
+              id: "t-2",
+              attributes: {
+                className: "FooTests",
+                name: "testLoad()",
+                status: "MIXED",
+                message: "XCTAssertEqual failed",
+                fileSource: { path: "Tests/FooTests.swift", lineNumber: 12 },
+                destinationTestResults: [
+                  {
+                    deviceName: "iPhone 17",
+                    osVersion: "26.1",
+                    status: "FAILURE",
+                  },
+                  { deviceName: "iPad", osVersion: "26.1", status: "SUCCESS" },
+                ],
+              },
+            },
+          ],
+          links: { self: "x" },
+        },
+      ],
+    });
+    const result = await run(["xcode-cloud", "run", "run-7"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/ciBuildActions/a-test/testResults",
+      expect.objectContaining({ cursor: "P2" }),
+    );
+    expect(client.get).not.toHaveBeenCalledWith(
+      "/v1/ciBuildActions/a-build/issues",
+      expect.anything(),
+    );
+    const output = JSON.parse(result.stdout);
+    expect(output).toMatchObject({
+      id: "run-7",
+      number: 7,
+      completionStatus: "FAILED",
+    });
+    expect(output.actions).toEqual([
+      {
+        id: "a-build",
+        name: "Build",
+        type: "BUILD",
+        completionStatus: "SUCCEEDED",
+        issueCounts: { errors: 0, warnings: 0 },
+      },
+      {
+        id: "a-test",
+        name: "Test",
+        type: "TEST",
+        completionStatus: "FAILED",
+        issueCounts: { testFailures: 1 },
+        issues: [
+          {
+            type: "TEST_FAILURE",
+            message: "XCTAssertEqual failed",
+            file: "Tests/FooTests.swift:12",
+            category: "Test",
+          },
+        ],
+        moreIssues: false,
+        failedTests: [
+          {
+            className: "FooTests",
+            name: "testLoad()",
+            status: "MIXED",
+            message: "XCTAssertEqual failed",
+            file: "Tests/FooTests.swift:12",
+            destinations: [
+              { device: "iPhone 17", osVersion: "26.1", status: "FAILURE" },
+            ],
+          },
+        ],
+        moreTestResults: false,
+      },
+    ]);
+  });
+
+  it("should list a run's artifacts as links without downloading them", async () => {
+    const { provider } = routes({
+      "/v1/ciBuildRuns/run-7/actions": {
+        data: [
+          {
+            type: "ciBuildActions",
+            id: "a-1",
+            attributes: { name: "Archive", actionType: "ARCHIVE" },
+          },
+        ],
+        links: { self: "x" },
+      },
+      "/v1/ciBuildActions/a-1/artifacts": {
+        data: [
+          {
+            type: "ciArtifacts",
+            id: "f-1",
+            attributes: {
+              fileType: "LOG_BUNDLE",
+              fileName: "logs.zip",
+              fileSize: 1024,
+              downloadUrl: "https://example.com/logs.zip",
+            },
+          },
+        ],
+        links: { self: "x" },
+      },
+    });
+    const result = await run(["xcode-cloud", "artifacts", "run-7"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      runId: "run-7",
+      actions: [
+        {
+          id: "a-1",
+          name: "Archive",
+          type: "ARCHIVE",
+          artifacts: [
+            {
+              id: "f-1",
+              type: "LOG_BUNDLE",
+              fileName: "logs.zip",
+              fileSize: 1024,
+              downloadUrl: "https://example.com/logs.zip",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("should name the Xcode Cloud role when Apple refuses the key", async () => {
+    const provider: AscClientProvider = () => ({
+      ...noWrites(),
+      get: () =>
+        Promise.reject(
+          new AscApiError(403, {
+            errors: [{ status: "403", code: "FORBIDDEN_ERROR", title: "x" }],
+          }),
+        ),
+    });
+    const result = await run(["xcode-cloud", "products"], provider);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[permission]");
+    expect(result.stderr).toContain("access to Xcode Cloud");
+  });
+});

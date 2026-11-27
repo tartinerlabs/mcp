@@ -41,9 +41,19 @@ export interface UploadOperation {
   requestHeaders?: { name?: string; value?: string }[];
 }
 
+/** Per-request options for `get`. */
+export interface GetOptions {
+  /**
+   * Media type to ask for, for endpoints that answer with Apple's own JSON
+   * types such as `application/vnd.apple.xcode-metrics+json`; JSON:API
+   * errors still arrive as `application/json`.
+   */
+  accept?: string;
+}
+
 /** The App Store Connect operations the commands depend on. */
 export interface AscClient {
-  get<T>(path: string, query?: AscQuery): Promise<T>;
+  get<T>(path: string, query?: AscQuery, options?: GetOptions): Promise<T>;
   /**
    * Sends a JSON:API body; resolves to the response document, or undefined
    * for a 204, which relationship changes return.
@@ -110,6 +120,7 @@ export async function createAscClient(
     method: "GET" | "POST" | "PATCH" | "DELETE",
     url: URL,
     body?: unknown,
+    accept = "application/json",
   ): Promise<unknown> {
     const token = await signEs256Jwt({
       header: { kid: key.keyId, typ: "JWT" },
@@ -120,7 +131,7 @@ export async function createAscClient(
       method,
       headers: {
         authorization: `Bearer ${token}`,
-        accept: "application/json",
+        accept,
         ...(body === undefined ? {} : { "content-type": "application/json" }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -149,7 +160,11 @@ export async function createAscClient(
   }
 
   return {
-    async get<T>(path: string, query: AscQuery = {}): Promise<T> {
+    async get<T>(
+      path: string,
+      query: AscQuery = {},
+      { accept }: GetOptions = {},
+    ): Promise<T> {
       const url = new URL(path, ASC_API);
       for (const [name, value] of Object.entries(query)) {
         if (value === undefined) continue;
@@ -158,7 +173,14 @@ export async function createAscClient(
           Array.isArray(value) ? value.join(",") : String(value),
         );
       }
-      return json<T>(await request("GET", url));
+      return json<T>(
+        await request(
+          "GET",
+          url,
+          undefined,
+          accept && `${accept}, application/json`,
+        ),
+      );
     },
     async post<T>(path: string, body: unknown): Promise<T> {
       return json<T>(await request("POST", new URL(path, ASC_API), body), true);
