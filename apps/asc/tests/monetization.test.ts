@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, open, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Command } from "commander";
@@ -936,8 +936,14 @@ describe("subscriptions offers", () => {
       {},
       { accept: "text/csv" },
     );
-    expect(await readFile(out, "utf8")).toBe(csv);
-    expect((await stat(out)).mode & 0o777).toBe(0o600);
+    // Read the contents and mode through one handle, so both describe the same file.
+    const saved = await open(out);
+    try {
+      expect(await saved.readFile("utf8")).toBe(csv);
+      expect((await saved.stat()).mode & 0o777).toBe(0o600);
+    } finally {
+      await saved.close();
+    }
     vi.mocked(console.log).mockClear();
     const again = await run(
       ["subscriptions", "offers", "offer-codes", "codes", "B1", "--out", out],
