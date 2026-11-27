@@ -75,8 +75,15 @@ export interface AscClient {
     operation: UploadOperation,
     part: Uint8Array<ArrayBuffer>,
   ): Promise<void>;
-  /** Reads a binary API response, such as a gzipped sales or finance report. */
-  download(path: string, query?: AscQuery): Promise<Uint8Array>;
+  /**
+   * Reads a binary API response, such as a gzipped sales or finance report;
+   * `accept` asks for another type, such as `text/csv`.
+   */
+  download(
+    path: string,
+    query?: AscQuery,
+    options?: GetOptions,
+  ): Promise<Uint8Array>;
   /**
    * Reads a file from a URL Apple's response gave, such as an analytics
    * report segment, with no token: those URLs are pre-signed.
@@ -279,7 +286,11 @@ export async function createAscClient(
         );
       }
     },
-    async download(path: string, query: AscQuery = {}): Promise<Uint8Array> {
+    async download(
+      path: string,
+      query: AscQuery = {},
+      { accept = "application/a-gzip" }: GetOptions = {},
+    ): Promise<Uint8Array> {
       const url = apiUrl(path);
       for (const [name, value] of Object.entries(query)) {
         if (value === undefined) continue;
@@ -291,7 +302,7 @@ export async function createAscClient(
       const response = await sendRequest(url, {
         headers: {
           authorization: await authorization(),
-          accept: "application/a-gzip, application/json",
+          accept: `${accept}, application/json`,
         },
         signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
       });

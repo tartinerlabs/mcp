@@ -8,7 +8,7 @@ import {
   NotFoundError,
   UploadIncompleteError,
 } from "../utils/errors.ts";
-import { allPages, territorySchema } from "./pricing.ts";
+import { allPages, dateSchema, territorySchema } from "./pricing.ts";
 
 interface TerritoryAvailabilityAttributes {
   available?: boolean;
@@ -86,17 +86,20 @@ export const setAvailabilityInput = z.object({
     .array(territorySchema)
     .min(1, "Give the territories with --territory, such as USA,GBR.")
     .max(200),
-  available: z.boolean({
-    error:
-      "Give --available to add the territories or --no-available to remove them.",
-  }),
+  available: z.boolean().optional(),
+  preOrder: z.boolean().optional(),
+  releaseDate: dateSchema.optional(),
   yes: z.boolean().default(false),
 });
 
 /**
- * Adds an app to territories, or removes it from them. Without `yes`, shows
- * each territory's current availability, content statuses and which would
- * change.
+ * Adds an app to territories, or removes it from them, and turns pre-orders
+ * on or off there with the release date. Without `yes`, shows each
+ * territory's current availability, pre-order, release date, content
+ * statuses and what would change.
+ *
+ * Apple sets the pre-order publish date itself; only `releaseDate` and
+ * `preOrderEnabled` can be sent, and a pre-order needs a release date.
  *
  * Unverified: Apple documents `PATCH /v1/territoryAvailabilities/{id}` only as
  * updating the release territories of an app pre-order. That it also adds or
@@ -107,6 +110,15 @@ export async function setAvailability(
   client: AscClient,
   input: z.output<typeof setAvailabilityInput>,
 ) {
+  if (
+    input.available === undefined &&
+    input.preOrder === undefined &&
+    input.releaseDate === undefined
+  ) {
+    throw new InvalidInputError(
+      "Give --available or --no-available, --pre-order or --no-pre-order, or --release-date.",
+    );
+  }
   const availability = await readAvailability(client, input.appId);
   const byCode = new Map(
     availability.territories.map((item) => [item.territory, item]),
@@ -120,19 +132,47 @@ export async function setAvailability(
   const territories = [...new Set(input.territories)].flatMap(
     (code) => byCode.get(code) ?? [],
   );
+  const diff = (item: (typeof territories)[number]) => {
+    const result: Record<string, unknown> = {};
+    if (input.available !== undefined && item.available !== input.available) {
+      result.available = input.available;
+    }
+    if (
+      input.preOrder !== undefined &&
+      item.preOrderEnabled !== input.preOrder
+    ) {
+      result.preOrderEnabled = input.preOrder;
+    }
+    if (
+      input.releaseDate !== undefined &&
+      item.releaseDate?.slice(0, 10) !== input.releaseDate
+    ) {
+      result.releaseDate = input.releaseDate;
+    }
+    return result;
+  };
+  const action =
+    input.available === undefined
+      ? "set-pre-order"
+      : input.available
+        ? "add-territories"
+        : "remove-territories";
   const changing = territories.filter(
-    (item) => item.available !== input.available,
+    (item) => Object.keys(diff(item)).length > 0,
   );
   if (!input.yes) {
     return {
       dryRun: true,
-      action: input.available ? "add-territories" : "remove-territories",
+      action,
       appId: input.appId,
       territories: territories.map((item) => ({
         territory: item.territory,
         available: item.available,
+        preOrderEnabled: item.preOrderEnabled,
+        releaseDate: item.releaseDate,
+        preOrderPublishDate: item.preOrderPublishDate,
         contentStatuses: item.contentStatuses,
-        changes: item.available !== input.available,
+        changes: diff(item),
       })),
     };
   }
@@ -145,7 +185,7 @@ export async function setAvailability(
         data: {
           type: "territoryAvailabilities",
           id: item.id,
-          attributes: { available: input.available },
+          attributes: diff(item),
         },
       });
       changed.push(item.territory ?? item.id);
@@ -170,10 +210,5 @@ export async function setAvailability(
       { cause: error },
     );
   }
-  return {
-    dryRun: false,
-    action: input.available ? "add-territories" : "remove-territories",
-    appId: input.appId,
-    changed,
-  };
+  return { dryRun: false, action, appId: input.appId, changed };
 }
