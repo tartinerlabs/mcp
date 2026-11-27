@@ -11,6 +11,20 @@ import {
   setAgeRatingInput,
 } from "./commands/age-rating.ts";
 import {
+  analyticsInput,
+  analyticsInstancesInput,
+  analyticsReportsInput,
+  analyticsSummaryInput,
+  CATEGORIES,
+  GRANULARITIES,
+  getAnalyticsSummary,
+  listAnalyticsInstances,
+  listAnalyticsReports,
+  listAnalyticsRequests,
+  requestAnalytics,
+  requestAnalyticsInput,
+} from "./commands/analytics.ts";
+import {
   appInfoInput,
   getAppInfo,
   setAppInfo,
@@ -92,6 +106,12 @@ import {
   replyToReview,
 } from "./commands/review-replies.ts";
 import { listReviews, reviewsInput } from "./commands/reviews.ts";
+import {
+  financeInput,
+  getFinance,
+  getSales,
+  salesInput,
+} from "./commands/sales.ts";
 import {
   deleteInput,
   deleteScreenshots,
@@ -1258,6 +1278,154 @@ export function createProgram(
     )
     .action(async (appId: string, options, command: Command) => {
       await run(command, statusInput, { appId, ...options }, getStatus);
+    });
+
+  /** Sales and finance reports refuse individual keys, so say so before calling Apple. */
+  function requireTeamKey(command: Command, what: string): boolean {
+    const issuerId =
+      program.opts<CredentialOptions>().issuerId ?? process.env.ASC_ISSUER_ID;
+    if (issuerId) return true;
+    command.error(
+      `[permission] ${what} reports need a team API key, which has an issuer ID: pass --issuer-id or set ASC_ISSUER_ID. Individual keys cannot read them; an Admin creates a team key in App Store Connect → Users and Access → Integrations → Team Keys.`,
+    );
+    return false;
+  }
+
+  const VENDOR = new Option(
+    "--vendor-number <number>",
+    "your vendor number, from Payments and Financial Reports",
+  ).env("ASC_VENDOR_NUMBER");
+
+  program
+    .command("sales")
+    .description(
+      "Sales and Trends summary for one day, week, month or year, aggregated: total units and proceeds, then by product type, country and product (apps and in-app purchases). Proceeds stay in each currency of proceeds. Needs a team key with the Admin, Finance or Sales and Reports role.",
+    )
+    .addOption(VENDOR)
+    .addOption(
+      new Option("--frequency <frequency>", "report period")
+        .choices(["DAILY", "WEEKLY", "MONTHLY", "YEARLY"])
+        .default("DAILY"),
+    )
+    .option(
+      "--date <date>",
+      "YYYY-MM-DD for daily and weekly (the Sunday the week ends), YYYY-MM for monthly, YYYY for yearly; a daily report without it is the latest",
+    )
+    .action(async (options, command: Command) => {
+      if (!requireTeamKey(command, "Sales")) return;
+      await run(command, salesInput, options, getSales);
+    });
+
+  program
+    .command("finance")
+    .description(
+      "Financial report for one Apple fiscal month, aggregated like sales: units and proceeds (extended partner share) by product type, country and product. Needs a team key with the Admin or Finance role.",
+    )
+    .addOption(VENDOR)
+    .option("--month <month>", "the fiscal month, YYYY-MM (required)")
+    .option(
+      "--region <code>",
+      "a report region such as US or EU; ZZ is all regions consolidated",
+      "ZZ",
+    )
+    .option("--detail", "the finance detail report (region Z1) instead")
+    .action(async (options, command: Command) => {
+      if (!requireTeamKey(command, "Finance")) return;
+      await run(command, financeInput, options, getFinance);
+    });
+
+  const analytics = program
+    .command("analytics")
+    .description(
+      "App analytics through Apple's Analytics Reports API. Lists the app's report requests; create one with analytics request, then use analytics reports, analytics instances and analytics summary. Reading needs the Admin, Finance or Sales and Reports role.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .action(async (appId: string, _options, command: Command) => {
+      await run(command, analyticsInput, { appId }, listAnalyticsRequests);
+    });
+
+  analytics
+    .command("request")
+    .description(
+      "Ask Apple to start generating analytics reports for an app (ongoing by default); an active request of the same kind is reused. The first reports arrive in 1 to 2 days. Needs a key with the Admin role.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option("--one-time", "a one-time snapshot instead of ongoing reports")
+    .option(...YES)
+    .action(async (appId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        requestAnalyticsInput,
+        { appId, ...options },
+        requestAnalytics,
+      );
+    });
+
+  analytics
+    .command("reports")
+    .description(
+      "The reports Apple generates for an app, such as App Downloads Standard or App Sessions Standard: id, name and category. Use the id with analytics instances.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .addOption(
+      new Option("--category <category>", "only this category").choices([
+        ...CATEGORIES,
+      ]),
+    )
+    .option("--name <name>", "only the report with this exact name")
+    .action(async (appId: string, options, command: Command) => {
+      await run(
+        command,
+        analyticsReportsInput,
+        { appId, ...options },
+        listAnalyticsReports,
+      );
+    });
+
+  analytics
+    .command("instances")
+    .description(
+      "A report's instances, one per granularity and processing date. Use the id with analytics summary.",
+    )
+    .argument("<report-id>", "report id from the analytics reports command")
+    .addOption(
+      new Option("--granularity <granularity>", "instance period")
+        .choices([...GRANULARITIES])
+        .default("DAILY"),
+    )
+    .option("--date <date>", "only this processing date, YYYY-MM-DD")
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (reportId: string, options, command: Command) => {
+      await run(
+        command,
+        analyticsInstancesInput,
+        { reportId, ...options },
+        listAnalyticsInstances,
+      );
+    });
+
+  analytics
+    .command("summary")
+    .description(
+      "Download one instance's files and sum its numeric columns, in total and by the --group-by columns. Prints the report's columns, so a first run without --group-by shows what to group by.",
+    )
+    .argument(
+      "<instance-id>",
+      "instance id from the analytics instances command",
+    )
+    .option(
+      "--group-by <columns>",
+      'comma-separated column names, such as "Territory,Source Type"',
+    )
+    .option("--top <number>", "at most this many groups, largest first", "50")
+    .action(async (instanceId: string, options, command: Command) => {
+      await run(
+        command,
+        analyticsSummaryInput,
+        { instanceId, ...options },
+        getAnalyticsSummary,
+      );
     });
 
   return program;

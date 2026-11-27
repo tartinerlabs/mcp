@@ -64,6 +64,13 @@ export interface AscClient {
     operation: UploadOperation,
     part: Uint8Array<ArrayBuffer>,
   ): Promise<void>;
+  /** Reads a binary API response, such as a gzipped sales or finance report. */
+  download(path: string, query?: AscQuery): Promise<Uint8Array>;
+  /**
+   * Reads a file from a URL Apple's response gave, such as an analytics
+   * report segment, with no token: those URLs are pre-signed.
+   */
+  downloadSigned(url: string): Promise<Uint8Array>;
 }
 
 export interface AscClientOptions {
@@ -78,6 +85,7 @@ const AUDIENCE = "appstoreconnect-v1";
 const TOKEN_LIFETIME_S = 120;
 const TIMEOUT_MS = 30_000;
 const UPLOAD_TIMEOUT_MS = 300_000;
+const DOWNLOAD_TIMEOUT_MS = 300_000;
 /** What `request` returns for a 204, which has no body by design. */
 const NO_CONTENT = Symbol("no content");
 
@@ -103,6 +111,25 @@ export async function createAscClient(
     throw new CredentialsError(
       "The private key file is not a valid .p8 key: expected the unencrypted file downloaded from App Store Connect.",
     );
+  }
+
+  /** Signs a fresh token for one request. */
+  function authorization(): Promise<string> {
+    return signEs256Jwt({
+      header: { kid: key.keyId, typ: "JWT" },
+      payload: tokenClaims(key, now()),
+      key: signingKey,
+    }).then((token) => `Bearer ${token}`);
+  }
+
+  /** Sends a request, turning a failed fetch into a NetworkError. */
+  function sendRequest(url: URL, init: RequestInit): Promise<Response> {
+    return send(url, init).catch((error: unknown) => {
+      if (error instanceof TypeError) {
+        throw new NetworkError("fetch failed", { cause: error });
+      }
+      throw error;
+    });
   }
 
   /** Signs a fresh token, sends the request and returns the parsed JSON body (undefined when empty, NO_CONTENT for a 204). */
@@ -206,6 +233,51 @@ export async function createAscClient(
           `Apple's storage refused part of the file with HTTP ${response.status}; the upload URL may have expired, so run the upload again.`,
         );
       }
+    },
+    async download(path: string, query: AscQuery = {}): Promise<Uint8Array> {
+      const url = new URL(path, ASC_API);
+      for (const [name, value] of Object.entries(query)) {
+        if (value === undefined) continue;
+        url.searchParams.set(
+          name,
+          Array.isArray(value) ? value.join(",") : String(value),
+        );
+      }
+      const response = await sendRequest(url, {
+        headers: {
+          authorization: await authorization(),
+          accept: "application/a-gzip, application/json",
+        },
+        signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+      });
+      if (!response.ok) {
+        const data: unknown = await response.json().catch(() => undefined);
+        throw new AscApiError(response.status, data);
+      }
+      return new Uint8Array(await response.arrayBuffer());
+    },
+    async downloadSigned(url: string): Promise<Uint8Array> {
+      let target: URL;
+      try {
+        target = new URL(url);
+      } catch {
+        target = new URL("invalid:");
+      }
+      if (target.protocol !== "https:") {
+        throw new UnexpectedResponseError(
+          "App Store Connect returned a download without an HTTPS URL.",
+        );
+      }
+      const response = await sendRequest(target, {
+        signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+      });
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new UnexpectedResponseError(
+          `Apple's storage refused the download with HTTP ${response.status}; the download URL may have expired, so run the command again.`,
+        );
+      }
+      return new Uint8Array(await response.arrayBuffer());
     },
   };
 }
