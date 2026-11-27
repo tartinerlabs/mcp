@@ -27,7 +27,7 @@ export function reportText(bytes: Uint8Array): string {
 }
 
 /** Splits one comma-separated line, honouring double quotes. */
-function splitCsv(line: string): string[] {
+export function splitCsv(line: string): string[] {
   const fields: string[] = [];
   let field = "";
   let quoted = false;

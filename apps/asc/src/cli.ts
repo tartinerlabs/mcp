@@ -41,8 +41,14 @@ import { buildUploadInput, uploadBuild } from "./commands/build-upload.ts";
 import {
   buildsInput,
   complianceInput,
+  downloadDsyms,
+  dsymsInput,
   expireBuild,
+  expireBuilds,
+  expireBuildsInput,
   expireInput,
+  latestBuild,
+  latestInput,
   listBuilds,
   setBuildCompliance,
   type WaitDependencies,
@@ -191,17 +197,35 @@ import {
   addTestersInput,
   betaFeedbackInput,
   betaGroupsInput,
+  betaInfoInput,
   betaReviewInput,
   betaTestersInput,
+  createGroup,
+  createGroupInput,
+  deleteGroup,
+  deleteGroupInput,
+  exportTesters,
+  exportTestersInput,
   FEEDBACK_TYPES,
+  getBetaInfo,
   getBetaReview,
+  importTesters,
+  importTestersInput,
   listBetaFeedback,
   listBetaGroups,
   listBetaTesters,
   notesInput,
+  notifyInput,
+  notifyTesters,
   removeTesters,
   removeTestersInput,
+  setBetaInfo,
+  setBetaInfoInput,
   setBuildNotes,
+  setGroup,
+  setGroupInput,
+  setReviewDetails,
+  setReviewDetailsInput,
   submitBetaReview,
   submitBetaReviewInput,
 } from "./commands/testflight.ts";
@@ -279,6 +303,14 @@ function collectList(value: string, previous: string[] = []): string[] {
       .map((item) => item.trim())
       .filter(Boolean),
   ];
+}
+
+/** The one group a --group option names; the option collects, so more than one is an error. */
+function oneGroup(command: Command, groups: string[] | undefined) {
+  if (groups && groups.length > 1) {
+    return command.error("[invalid_input] Give one --group.");
+  }
+  return groups?.[0];
 }
 
 /** Clock and sleep for `builds wait`; tests pass fakes. */
@@ -1322,16 +1354,98 @@ export function createProgram(
   builds
     .command("expire")
     .description(
-      "Expire a build so testers can no longer install it from TestFlight. This cannot be undone. Without --yes, prints the build and whether it is already expired. Needs a key with the App Manager role.",
+      "Expire a build so testers can no longer install it from TestFlight, or with --older-than or --keep, many of an app's builds at once. This cannot be undone. Without --yes, prints every build it would expire. Needs a key with the App Manager role.",
     )
-    .argument("<build-id>", "build id from the builds command")
+    .argument(
+      "<id>",
+      "build id from the builds command, or the numeric app ID with --older-than or --keep",
+    )
+    .option(
+      "--older-than <build-id>",
+      "expire every unexpired build of the app uploaded before this one, on the same platform",
+    )
+    .option(
+      "--keep <n>",
+      "expire every unexpired build of the app except the n most recently uploaded",
+    )
+    .addOption(
+      new Option(
+        "--platform <platform>",
+        "with --older-than or --keep, only builds for this platform",
+      ).choices([...PLATFORMS]),
+    )
     .option(...YES)
-    .action(async (buildId: string, options, command: Command) => {
+    .action(async (id: string, options, command: Command) => {
+      if (options.olderThan !== undefined || options.keep !== undefined) {
+        await runWrite(
+          command,
+          expireBuildsInput,
+          { appId: id, ...options },
+          expireBuilds,
+        );
+        return;
+      }
       await runWrite(
         command,
         expireInput,
-        { buildId, yes: options.yes },
+        { buildId: id, yes: options.yes },
         expireBuild,
+      );
+    });
+
+  builds
+    .command("latest")
+    .description(
+      "The highest build number among an app's 200 most recent uploads, with its id, version, platform and state; for a build script choosing the next number. Expired and failed builds count, since Apple does not take a build number twice.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option(
+      "--app-version <version>",
+      "only builds of this version, such as 2.5.0",
+    )
+    .addOption(
+      new Option(
+        "--platform <platform>",
+        "only builds for this platform",
+      ).choices([...PLATFORMS]),
+    )
+    .option(
+      "--next",
+      "also print the next build number (the last part plus one)",
+    )
+    .action(async (appId: string, options, command: Command) => {
+      await run(command, latestInput, { appId, ...options }, latestBuild);
+    });
+
+  builds
+    .command("dsyms")
+    .description(
+      "Download a build's dSYMs, one file per app, app clip or watch app bundle, into a directory, for symbolicating crash reports. Prints what it wrote. Existing files are not replaced without --overwrite.",
+    )
+    .argument("[build-id]", "build id from the builds command")
+    .option("--out <dir>", "directory to write the dSYMs to (required)")
+    .option("--app <app-id>", "pick the build by app instead of its id")
+    .option("--build-number <number>", "with --app, the build number")
+    .option("--app-version <version>", "with --app, the build's version")
+    .addOption(
+      new Option(
+        "--platform <platform>",
+        "with --app, the build's platform",
+      ).choices([...PLATFORMS]),
+    )
+    .option("--overwrite", "replace files that already exist")
+    .action(async (buildId: string | undefined, options, command: Command) => {
+      await run(
+        command,
+        dsymsInput,
+        {
+          buildId,
+          appId: options.app,
+          // `builds` also defines --build-number, so Commander hands it to the parent.
+          buildNumber: command.parent?.opts().buildNumber,
+          ...options,
+        },
+        downloadDsyms,
       );
     });
 
@@ -1379,6 +1493,88 @@ export function createProgram(
       },
     );
 
+  groups
+    .command("create")
+    .description(
+      "Create a TestFlight group for an app. Internal groups take App Store Connect users; external groups need beta review and can have a public link. Without --yes, prints the group it would create.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option("--name <name>", "the group's name (required)")
+    .option("--internal", "an internal group")
+    .option("--external", "an external group")
+    .option(
+      "--all-builds",
+      "internal groups: get every new build automatically",
+    )
+    .option("--public-link", "external groups: turn on the public link")
+    .option(
+      "--public-link-limit <n>",
+      "with --public-link, cap testers at n (up to 10000)",
+    )
+    .option("--no-feedback", "turn off tester feedback")
+    .option(...YES)
+    .action(async (appId: string, _options, command: Command) => {
+      // `groups` also defines --internal, so read options with the parent's.
+      const options = command.optsWithGlobals();
+      if (options.internal && options.external) {
+        return command.error(
+          "[invalid_input] Give --internal or --external, not both.",
+        );
+      }
+      await runWrite(
+        command,
+        createGroupInput,
+        {
+          appId,
+          name: options.name,
+          internal: options.external ? false : options.internal,
+          allBuilds: options.allBuilds,
+          publicLink: options.publicLink,
+          publicLinkLimit: options.publicLinkLimit,
+          feedback: options.feedback === false ? false : undefined,
+          yes: options.yes,
+        },
+        createGroup,
+      );
+    });
+
+  groups
+    .command("set")
+    .description(
+      "Rename a group or change its public link, public link limit or feedback setting. Only external groups have a public link. Without --yes, prints the current settings and what would change.",
+    )
+    .argument("<group-id>", "group id from testflight groups")
+    .option("--name <name>", "new name")
+    .option("--public-link", "turn the public link on")
+    .option("--no-public-link", "turn the public link off")
+    .option(
+      "--public-link-limit <n>",
+      "cap public link testers at n (up to 10000)",
+    )
+    .option("--no-public-link-limit", "remove the public link's tester limit")
+    .option("--feedback", "turn tester feedback on")
+    .option("--no-feedback", "turn tester feedback off")
+    .option(...YES)
+    .action(async (group: string, options, command: Command) => {
+      await runWrite(command, setGroupInput, { group, ...options }, setGroup);
+    });
+
+  groups
+    .command("delete")
+    .description(
+      "Delete a TestFlight group; its testers lose access to the builds they got through it. This cannot be undone. Without --yes, prints the group.",
+    )
+    .argument("<group-id>", "group id from testflight groups")
+    .option(...YES)
+    .action(async (group: string, options, command: Command) => {
+      await runWrite(
+        command,
+        deleteGroupInput,
+        { group, yes: options.yes },
+        deleteGroup,
+      );
+    });
+
   const testers = testflight
     .command("testers")
     .description(
@@ -1388,6 +1584,8 @@ export function createProgram(
     .option(
       "--group <group-id>",
       "only testers in this group (id from testflight groups)",
+      // Collected so `testers import` can take several: Commander gives the parent its subcommands' --group.
+      collectList,
     )
     .addOption(
       new Option(
@@ -1401,7 +1599,7 @@ export function createProgram(
       await run(
         command,
         betaTestersInput,
-        { appId, ...options },
+        { appId, ...options, group: oneGroup(command, options.group) },
         listBetaTesters,
       );
     });
@@ -1445,6 +1643,179 @@ export function createProgram(
         removeTestersInput,
         { group, emails: options.email ?? [], yes: options.yes },
         removeTesters,
+      );
+    });
+
+  testers
+    .command("import")
+    .description(
+      "Add the testers in a CSV file to one or more of an app's groups. The header names an email column and optionally firstName and lastName. Someone already testing the app joins the groups; anyone else is invited. Each row's result names its row number, not the email. Without --yes, prints what would happen to each row.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option("--file <path>", "the CSV file (required)")
+    .option(
+      "--group <group-ids>",
+      "groups to add them to, comma-separated or repeated (required)",
+      collectList,
+    )
+    .option(...YES)
+    .action(async (appId: string, _options, command: Command) => {
+      // `testers` also defines --group, so read options with the parent's.
+      const options = command.optsWithGlobals();
+      let failed = 0;
+      await runWrite(
+        command,
+        importTestersInput,
+        {
+          appId,
+          file: options.file,
+          groups: options.group ?? [],
+          yes: options.yes,
+        },
+        async (client, input) => {
+          const result = await importTesters(client, input);
+          failed = "failed" in result ? (result.failed ?? 0) : 0;
+          return result;
+        },
+      );
+      if (failed > 0) {
+        command.error(
+          `${failed} row(s) failed; see their error in the result.`,
+        );
+      }
+    });
+
+  testers
+    .command("export")
+    .description(
+      "Write an app's testers, or one group's, to a new CSV or JSON file: id, email, name, invite type and state. Names and emails go only to that file (readable only by you), never to stdout.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option(
+      "--out <path>",
+      "the new file to write (required); .json writes JSON",
+    )
+    .option(
+      "--group <group-id>",
+      "only testers in this group (id from testflight groups)",
+    )
+    .addOption(
+      new Option(
+        "--format <format>",
+        "csv or json (default: by --out's extension)",
+      ).choices(["csv", "json"]),
+    )
+    .action(async (appId: string, _options, command: Command) => {
+      // `testers` also defines --group, so read options with the parent's.
+      const options = command.optsWithGlobals();
+      await run(
+        command,
+        exportTestersInput,
+        {
+          appId,
+          out: options.out,
+          group: oneGroup(command, options.group),
+          format: options.format,
+        },
+        exportTesters,
+      );
+    });
+
+  const betaInfo = testflight
+    .command("info")
+    .description(
+      "An app's TestFlight test information: the beta description, feedback email, marketing and privacy URLs per language, and the beta app review details (contact, demo account and notes). The demo account password is never printed, only whether it is set.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .action(async (appId: string, _options, command: Command) => {
+      await run(command, betaInfoInput, { appId }, getBetaInfo);
+    });
+
+  betaInfo
+    .command("set")
+    .description(
+      "Set an app's beta app information for one language, creating the language if the app has none for it. Without --yes, prints the current values and what would change.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option("--locale <locale>", "the language, such as en-US (required)")
+    .option("--description <text>", "what testers should know about the app")
+    .option("--feedback-email <email>", "where testers' feedback emails go")
+    .option("--marketing-url <url>", "the app's marketing URL")
+    .option("--privacy-url <url>", "the app's privacy policy URL")
+    .option(...YES)
+    .action(async (appId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setBetaInfoInput,
+        {
+          appId,
+          locale: options.locale,
+          description: options.description,
+          feedbackEmail: options.feedbackEmail,
+          marketingUrl: options.marketingUrl,
+          privacyPolicyUrl: options.privacyUrl,
+          yes: options.yes,
+        },
+        setBetaInfo,
+      );
+    });
+
+  const reviewDetails = testflight
+    .command("review-details")
+    .description(
+      "An app's beta app review details, which a build needs before testflight review submit. Show them with testflight info.",
+    );
+
+  reviewDetails
+    .command("set")
+    .description(
+      "Set an app's beta app review details: the contact Apple's reviewers reach, the demo account they sign in with, and notes. The demo account password is sent to Apple but never printed. Without --yes, prints the current details and what would change.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option("--contact-first-name <name>", "contact's first name")
+    .option("--contact-last-name <name>", "contact's last name")
+    .option("--contact-phone <phone>", "contact's phone number")
+    .option("--contact-email <email>", "contact's email")
+    .option(
+      "--demo-account-required",
+      "reviewers need a demo account to sign in",
+    )
+    .option("--no-demo-account-required", "reviewers need no demo account")
+    .option("--demo-account-name <name>", "the demo account's user name")
+    .option(
+      "--demo-account-password <password>",
+      "the demo account's password (default: ASC_DEMO_ACCOUNT_PASSWORD); never printed",
+    )
+    .option("--notes <text>", "notes for the reviewer")
+    .option(...YES)
+    .action(async (appId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setReviewDetailsInput,
+        {
+          appId,
+          ...options,
+          demoAccountPassword:
+            options.demoAccountPassword ??
+            (process.env.ASC_DEMO_ACCOUNT_PASSWORD || undefined),
+        },
+        setReviewDetails,
+      );
+    });
+
+  testflight
+    .command("notify")
+    .description(
+      'Send a build\'s "new build available" notification to the testers who can test it, for an app that does not notify them automatically. Without --yes, prints the build.',
+    )
+    .argument("<build-id>", "build id from the builds command")
+    .option(...YES)
+    .action(async (buildId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        notifyInput,
+        { buildId, yes: options.yes },
+        notifyTesters,
       );
     });
 
