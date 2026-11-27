@@ -1,3 +1,13 @@
+## [0.28.0](https://github.com/tartinerlabs/mcp/compare/v0.27.0...v0.28.0) (2026-11-27)
+
+### Features
+
+* **asc:** read perf metrics and Xcode Cloud runs ([a0a4d6e](https://github.com/tartinerlabs/mcp/commit/a0a4d6e437e90b1986555adc6f04e463f5c11668)), closes [#65](https://github.com/tartinerlabs/mcp/issues/65) [#66](https://github.com/tartinerlabs/mcp/issues/66)
+
+### Bug Fixes
+
+* **asc:** keep one PermissionError after merging main ([f105f1a](https://github.com/tartinerlabs/mcp/commit/f105f1a7b50395345f7490eeb0b6c655a4b79c70))
+
 ## [0.27.0](https://github.com/tartinerlabs/mcp/compare/v0.26.0...v0.27.0) (2026-11-27)
 
 ### Features
