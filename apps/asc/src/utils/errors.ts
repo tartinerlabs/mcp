@@ -41,11 +41,6 @@ export class NotFoundError extends Error {
   override name = "NotFoundError";
 }
 
-/** Thrown when the key cannot reach what a command needs, such as an individual key asking for sales reports. */
-export class PermissionError extends Error {
-  override name = "PermissionError";
-}
-
 /** Thrown when a version or app info is in a state that no longer accepts the change. */
 export class NotEditableError extends Error {
   override name = "NotEditableError";
@@ -61,7 +56,7 @@ export class UploadIncompleteError extends Error {
   override name = "UploadIncompleteError";
 }
 
-/** Thrown when App Store Connect refuses a request and the command knows which role it needs; its message names the role. */
+/** Thrown when the key or its role cannot do what a command needs, such as an individual key asking for sales reports; its message says what is needed. */
 export class PermissionError extends Error {
   override name = "PermissionError";
 }
@@ -173,9 +168,6 @@ export function classifyError(error: unknown): ClassifiedError {
       status: 403,
       message: `${error.message}${appleDetail(error.detail)}`,
     };
-  }
-  if (error instanceof PermissionError) {
-    return { kind: "permission", message: error.message };
   }
   if (error instanceof WaitTimeoutError) {
     return { kind: "unavailable", message: error.message };
