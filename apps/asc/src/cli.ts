@@ -227,6 +227,12 @@ import {
   uploadInput,
   uploadScreenshots,
 } from "./commands/screenshots.ts";
+import {
+  nukeSigning,
+  nukeSigningInput,
+  syncSigning,
+  syncSigningInput,
+} from "./commands/signing.ts";
 import { getStatus, statusInput } from "./commands/status.ts";
 import {
   addBuildInput,
@@ -2884,6 +2890,88 @@ export function createProgram(
         command.optsWithGlobals(),
         registerDevices,
       );
+    });
+
+  const STORE = [
+    [
+      "--git-url <url>",
+      "the private git repository that holds the encrypted signing store (required)",
+    ],
+    ["--branch <branch>", "the store's branch (default: the repository's)"],
+  ] as const;
+
+  const signing = program
+    .command("signing")
+    .description(
+      "Share one team's certificates, private keys and profiles through an encrypted store in a private git repository.",
+    );
+
+  signing
+    .command("sync")
+    .description(
+      `Make the store hold a usable certificate of --type and, for each --bundle-id, a --profile-type profile signed by it, creating or renewing what is missing, invalid or expiring, then write the decrypted files to --out-dir (readable only by you). The passphrase comes from ASC_SIGNING_PASSPHRASE or --passphrase-env. --readonly never creates anything and needs no --yes. Without --yes, prints the plan. ${TEAM_KEY}`,
+    )
+    .option(...STORE[0])
+    .option(...STORE[1])
+    .addOption(
+      new Option("--type <type>", "certificate type (required)").choices([
+        ...CERTIFICATE_TYPES,
+      ]),
+    )
+    .addOption(
+      new Option("--profile-type <type>", "profile type").choices([
+        ...PROFILE_TYPES,
+      ]),
+    )
+    .option(
+      "--bundle-id <identifiers>",
+      "bundle identifiers such as com.example.app to keep profiles for; repeat or comma-separate",
+      collectList,
+    )
+    .option(
+      "--out-dir <path>",
+      "directory for the decrypted certificate, private key and profiles",
+    )
+    .option(
+      "--readonly",
+      "never create or renew; fail if the store is not usable",
+    )
+    .option(
+      "--renew-within-days <days>",
+      "renew a certificate or profile expiring within this many days",
+      "30",
+    )
+    .option(
+      "--passphrase-env <name>",
+      "environment variable holding the store passphrase",
+      "ASC_SIGNING_PASSPHRASE",
+    )
+    .option(...COMMON_NAME)
+    .option(...YES)
+    .action(async (options, command: Command) => {
+      await runWrite(command, syncSigningInput, options, syncSigning);
+    });
+
+  signing
+    .command("nuke")
+    .description(
+      `Revoke every certificate of --type on the team, delete every profile of each --profile-type, and remove them from the store. This cannot be undone; without --yes, lists what it would remove. ${TEAM_KEY}`,
+    )
+    .option(...STORE[0])
+    .option(...STORE[1])
+    .addOption(
+      new Option("--type <type>", "certificate type (required)").choices([
+        ...CERTIFICATE_TYPES,
+      ]),
+    )
+    .option(
+      "--profile-type <types>",
+      "profile types to delete too; repeat or comma-separate",
+      collectList,
+    )
+    .option(...YES)
+    .action(async (options, command: Command) => {
+      await runWrite(command, nukeSigningInput, options, nukeSigning);
     });
 
   program
