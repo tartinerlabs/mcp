@@ -1,3 +1,13 @@
+## [0.32.0](https://github.com/tartinerlabs/mcp/compare/v0.31.2...v0.32.0) (2026-11-27)
+
+### Features
+
+* **asc:** add remaining versions check checks ([0a4f00f](https://github.com/tartinerlabs/mcp/commit/0a4f00f704485fbedbec347167e65d61c523d6b3))
+
+### Bug Fixes
+
+* **asc:** count keyword characters in lint ([7e1447b](https://github.com/tartinerlabs/mcp/commit/7e1447bcdd360fa7a20c7faf93cb5084cc5844d2))
+
 ## [0.31.2](https://github.com/tartinerlabs/mcp/compare/v0.31.1...v0.31.2) (2026-11-27)
 
 ### Bug Fixes
