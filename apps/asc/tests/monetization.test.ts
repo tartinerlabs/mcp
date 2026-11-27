@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, open, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, open, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Command } from "commander";
@@ -925,7 +925,8 @@ describe("subscriptions offers", () => {
     const dry = await run(args, provider);
     expect(dry.exitCode).toBe(0);
     expect(client.post).not.toHaveBeenCalled();
-    await expect(stat(out)).rejects.toThrow();
+    // The dry run must not create the file; list the folder rather than probing the path.
+    expect(await readdir(dir)).toEqual([]);
     vi.mocked(console.log).mockClear();
     const done = await run([...args, "--yes"], provider);
     expect(done.exitCode).toBe(0);
