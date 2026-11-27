@@ -23,6 +23,7 @@ import {
   setAvailability,
   setAvailabilityInput,
 } from "./commands/availability.ts";
+import { buildUploadInput, uploadBuild } from "./commands/build-upload.ts";
 import {
   buildsInput,
   complianceInput,
@@ -992,6 +993,65 @@ export function createProgram(
         command.error(
           `Build ${build.version} finished processing as ${build.processingState}.`,
         );
+      }
+    });
+
+  builds
+    .command("upload")
+    .description(
+      "Upload an .ipa or .pkg to App Store Connect through the API and print the build upload's id and state. Without --yes, checks the file and the app and prints what would be uploaded. With --wait, then waits for the build as builds wait does. Needs a key with the App Manager or Developer role.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option("--file <path>", "the exported .ipa, or .pkg for a Mac app")
+    .option(
+      "--app-version <version>",
+      "the build's CFBundleShortVersionString, such as 1.2.0",
+    )
+    .option(
+      "--build-number <number>",
+      "the build's CFBundleVersion, such as 42",
+    )
+    .option(
+      "--platform <platform>",
+      "IOS, MAC_OS, TV_OS or VISION_OS (default: MAC_OS for a .pkg, IOS for an .ipa)",
+    )
+    .option(
+      "--wait",
+      "after uploading, wait until the build finishes processing",
+    )
+    .option("--timeout <minutes>", "with --wait, give up after this long", "30")
+    .option(
+      "--interval <seconds>",
+      "with --wait, time between checks, 10 to 300",
+      "30",
+    )
+    .option(...YES)
+    .action(async (appId: string, options, command: Command) => {
+      const writeErr = stderr(command);
+      let failed: string | undefined;
+      await runWrite(
+        command,
+        buildUploadInput,
+        {
+          appId,
+          // `builds` also defines --build-number, so Commander hands it to the parent.
+          buildNumber: command.parent?.opts().buildNumber,
+          version: options.appVersion,
+          ...options,
+        },
+        async (client, input) => {
+          const result = await uploadBuild(client, input, {
+            sleep,
+            now,
+            progress: (line) => writeErr(`${line}\n`),
+          });
+          const state = "build" in result ? result.build.processingState : "";
+          if (state && state !== "VALID") failed = state;
+          return result;
+        },
+      );
+      if (failed) {
+        command.error(`The build finished processing as ${failed}.`);
       }
     });
 
