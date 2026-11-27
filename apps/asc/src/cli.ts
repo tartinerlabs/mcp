@@ -99,6 +99,15 @@ import {
   setMetadata,
   setMetadataInput,
 } from "./commands/metadata.ts";
+
+import {
+  lintInput,
+  lintMetadata,
+  pullInput,
+  pullMetadata,
+  pushInput,
+  pushMetadata,
+} from "./commands/metadata-sync.ts";
 import {
   DIAGNOSTIC_TYPES,
   diagnosticLogsInput,
@@ -281,8 +290,10 @@ function collectList(value: string, previous: string[] = []): string[] {
   ];
 }
 
-/** Clock and sleep for `builds wait`; tests pass fakes. */
-export type ProgramOptions = Partial<Pick<WaitDependencies, "sleep" | "now">>;
+/** Clock and sleep for `builds wait`, and fetch for `metadata lint`'s URL checks; tests pass fakes. */
+export type ProgramOptions = Partial<
+  Pick<WaitDependencies, "sleep" | "now"> & { fetch: typeof fetch }
+>;
 
 /**
  * The command-line program: App Store Connect queries, and write commands
@@ -294,6 +305,7 @@ export function createProgram(
   {
     sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now = Date.now,
+    fetch: fetchUrl = fetch,
   }: ProgramOptions = {},
 ): Command {
   const program = new Command()
@@ -522,6 +534,117 @@ export function createProgram(
         setMetadata,
       );
     });
+
+  metadata
+    .command("pull")
+    .description(
+      "Write an app's App Store listing into a new folder: version.json with the copyright, and per locale metadata.json (the version's description, keywords, promotional text, What's New and URLs, and the app info's name, subtitle and privacy links) and its screenshots and app previews, named <GROUP>-<NN>-<name>. Uses the version being prepared or rejected, else the live one, unless --version-id is given.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option("--dir <folder>", "the new or empty folder to write (required)")
+    .option("--version-id <id>", "the version to pull")
+    .option("--platform <platform>", "IOS, MAC_OS, TV_OS or VISION_OS", "IOS")
+    .option("--no-media", "leave out screenshots and app previews")
+    .action(async (appId: string, options, command: Command) => {
+      const { versionId, ...rest } = options;
+      await run(
+        command,
+        pullInput,
+        { appId, versionId, ...rest },
+        pullMetadata,
+      );
+    });
+
+  metadata
+    .command("push")
+    .description(
+      "Compare a folder from metadata pull with App Store Connect and apply only the differences: fields a metadata.json gives (null clears one, a missing key is left alone), the copyright, new locales, and screenshots and app previews not yet placed (matched by file name). --sync-screenshots also removes placements the folder does not have and reorders to the folder's order. The metadata lint runs first and stops the push on errors. Without --yes, prints the plan per locale. Needs a key with the App Manager role.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .argument("<folder>", "the folder from metadata pull")
+    .option("--version-id <id>", "the version to push to")
+    .option("--platform <platform>", "IOS, MAC_OS, TV_OS or VISION_OS", "IOS")
+    .option(
+      "--sync-screenshots",
+      "also remove and reorder screenshots and previews to match the folder",
+    )
+    .option("--ignore-lint", "push even when the lint finds errors")
+    .option(
+      "--rule <name=severity>",
+      "set a lint rule to error, warning or off; repeatable",
+      collectList,
+    )
+    .option("--no-url-check", "skip the lint's requests to the listing's URLs")
+    .option(...YES)
+    .action(async (appId: string, dir: string, options, command: Command) => {
+      const { versionId, rule, urlCheck, ...rest } = options;
+      await runWrite(
+        command,
+        pushInput,
+        {
+          appId,
+          dir,
+          versionId,
+          rules: rule ?? [],
+          checkUrls: urlCheck,
+          ...rest,
+        },
+        (client, input) =>
+          pushMetadata(client, input, { fetch: fetchUrl, now }),
+      );
+    });
+
+  metadata
+    .command("lint")
+    .description(
+      'Check a version\'s listing in every locale, or a folder from metadata pull (--dir, no key needed), for what App Review often rejects: field lengths, placeholder text, other platforms or stores, unreachable support, marketing and privacy URLs, a copyright without this year, "free" in in-app purchase names, promises of features to come and negative references to Apple. Prints each finding with its locale, field, rule and severity, and exits 1 when any is an error.',
+    )
+    .argument("[version-id]", "version id from the versions command")
+    .option("--dir <folder>", "lint a folder from metadata pull instead")
+    .option(
+      "--rule <name=severity>",
+      "set a rule (length, placeholder, other-platforms, url-reachable, copyright-year, free-iap, future-features, apple-negative) to error, warning or off; repeatable",
+      collectList,
+    )
+    .option("--no-url-check", "skip requests to the listing's URLs")
+    .action(
+      async (versionId: string | undefined, options, command: Command) => {
+        const input = {
+          versionId,
+          dir: options.dir,
+          rules: options.rule ?? [],
+          checkUrls: options.urlCheck,
+        };
+        const execute = (
+          client: AscClient | undefined,
+          parsed: z.output<typeof lintInput>,
+        ) => lintMetadata(client, parsed, { fetch: fetchUrl, now });
+        let result: { errors: number };
+        if (options.dir !== undefined && versionId === undefined) {
+          // A folder needs no key, so no client is made.
+          const parsed = lintInput.safeParse(input);
+          if (!parsed.success) {
+            return command.error(
+              `[invalid_input] ${z.prettifyError(parsed.error)}`,
+            );
+          }
+          try {
+            result = await execute(undefined, parsed.data);
+          } catch (error) {
+            const { kind, message } = classifyError(error);
+            return command.error(`[${kind}] ${message}`);
+          }
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          result = await run(command, lintInput, input, execute);
+        }
+        if (result.errors > 0) {
+          command.error(
+            `[invalid_input] The metadata lint found ${result.errors} error(s).`,
+          );
+        }
+      },
+    );
 
   const appInfo = program
     .command("app-info")
