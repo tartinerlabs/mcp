@@ -94,6 +94,12 @@ import {
   subscriptionsInput,
 } from "./commands/iap.ts";
 import {
+  installSigning,
+  installSigningInput,
+  uninstallSigning,
+  uninstallSigningInput,
+} from "./commands/keychain.ts";
+import {
   getMetadata,
   metadataInput,
   setMetadata,
@@ -342,13 +348,30 @@ export function createProgram(
       client: AscClient,
       input: z.output<Schema>,
     ) => Promise<{ dryRun: boolean }>,
+    local = false,
   ): Promise<void> {
-    const result = await run(command, schema, input, execute);
+    const result = await run(command, schema, input, execute, local);
     if (result.dryRun) {
       stderr(command)(
         "Dry run: nothing was changed. Run the same command with --yes to do it.\n",
       );
     }
+  }
+
+  /** Like runWrite, for local commands that need no App Store Connect key. */
+  async function runLocalWrite<Schema extends z.ZodType>(
+    command: Command,
+    schema: Schema,
+    input: unknown,
+    execute: (input: z.output<Schema>) => Promise<{ dryRun: boolean }>,
+  ): Promise<void> {
+    await runWrite(
+      command,
+      schema,
+      input,
+      (_client, parsed) => execute(parsed),
+      true,
+    );
   }
 
   /** Validates the input, runs the query, prints its result and returns it. */
@@ -357,6 +380,7 @@ export function createProgram(
     schema: Schema,
     input: unknown,
     execute: (client: AscClient, input: z.output<Schema>) => Promise<Result>,
+    local = false,
   ): Promise<Result> {
     const parsed = schema.safeParse(input);
     if (!parsed.success) {
@@ -364,7 +388,10 @@ export function createProgram(
     }
     let result: Result;
     try {
-      const client = await getClient(program.opts<CredentialOptions>());
+      // Local commands (signing install) never ask for the key.
+      const client = local
+        ? ({} as AscClient)
+        : await getClient(program.opts<CredentialOptions>());
       result = await execute(client, parsed.data);
     } catch (error) {
       // Classified messages never carry the token or the private key.
@@ -2213,6 +2240,60 @@ export function createProgram(
     .option(...YES)
     .action(async (options, command: Command) => {
       await runWrite(command, nukeSigningInput, options, nukeSigning);
+    });
+
+  const KEYCHAIN = [
+    "--keychain <path>",
+    "the keychain file, such as ~/Library/Keychains/ci.keychain-db (required)",
+  ] as const;
+
+  signing
+    .command("install")
+    .description(
+      "macOS only: import a certificate and its private key (from certificates create or signing sync) into a keychain, created with --create-keychain for CI, unlock it, let codesign use the key without a prompt and add it to the search list; copy profiles to Xcode's profiles directory. The keychain password comes from ASC_KEYCHAIN_PASSWORD or --password-env. Without --yes, checks the files. Needs no App Store Connect key.",
+    )
+    .option(...KEYCHAIN)
+    .option("--create-keychain", "create the keychain; it must not exist")
+    .option(
+      "--password-env <name>",
+      "environment variable holding the keychain password",
+      "ASC_KEYCHAIN_PASSWORD",
+    )
+    .option("--cert <path>", "the certificate (.cer)")
+    .option("--key <path>", "its private key (PEM)")
+    .option(
+      "--profile <paths>",
+      "provisioning profiles to install; repeat or comma-separate",
+      collectList,
+    )
+    .option(
+      "--profiles-dir <path>",
+      "where to install profiles (default: ~/Library/Developer/Xcode/UserData/Provisioning Profiles)",
+    )
+    .option(...YES)
+    .action(async (options, command: Command) => {
+      await runLocalWrite(
+        command,
+        installSigningInput,
+        options,
+        installSigning,
+      );
+    });
+
+  signing
+    .command("uninstall")
+    .description(
+      "macOS only: remove a keychain made by signing install from the search list and delete it. Never deletes the login keychain. Without --yes, prints the keychain.",
+    )
+    .option(...KEYCHAIN)
+    .option(...YES)
+    .action(async (options, command: Command) => {
+      await runLocalWrite(
+        command,
+        uninstallSigningInput,
+        options,
+        uninstallSigning,
+      );
     });
 
   program
