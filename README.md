@@ -432,6 +432,15 @@ Mac software distributed outside the Mac App Store is notarized through Apple's 
 
 Stapling the ticket to the file stays a local step on a Mac once notarization is `Accepted`, so the app opens without a network check: `xcrun stapler staple MyApp.dmg` (or the `.pkg`, or the `.app` inside a `.zip`, which you then zip again).
 
+For an endpoint or field no command covers, `api <method> <path>` sends one request with your key and prints Apple's JSON, so there is no need to sign a token by hand for `curl`. When the same raw request is needed often, that is a sign a real command is missing.
+
+| Command | What it does |
+| --- | --- |
+| `api GET /v1/apps --query 'filter[bundleId]=com.example.app'` | Sends a `GET` (repeat `--query key=value`; a key given twice becomes a comma-separated list). `--paginate` follows `links.next` and prints every page's `data` and `included` joined, with the page count. |
+| `api PATCH /v1/apps/<id> --body patch.json` | Sends a `POST`, `PATCH` or `DELETE` with a JSON body from a file, or `--body -` for stdin. Like every write command it only prints the request without `--yes`, and with it prints Apple's response (`null` for a 204). |
+
+Only paths such as `/v1/apps`, or URLs on `https://api.appstoreconnect.apple.com`, are accepted: a URL on any other host is refused before anything is sent, so the token never leaves Apple's API. Errors are classified like every other command's (`[permission]`, `[not_found]` and so on).
+
 The key comes from options, or from environment variables when an option is not given. Nothing is stored: the `.p8` file is read on each run.
 
 | Option | Variable | Value |
