@@ -1,3 +1,9 @@
+## [0.32.1](https://github.com/tartinerlabs/mcp/compare/v0.32.0...v0.32.1) (2026-11-27)
+
+### Bug Fixes
+
+* **aso:** stop false keyword errors in CJK ([05a0e3e](https://github.com/tartinerlabs/mcp/commit/05a0e3e3635a4e7acbb95200c020d39841ada2ac))
+
 ## [0.32.0](https://github.com/tartinerlabs/mcp/compare/v0.31.2...v0.32.0) (2026-11-27)
 
 ### Features
