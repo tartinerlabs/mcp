@@ -1,3 +1,9 @@
+## [0.26.0](https://github.com/tartinerlabs/mcp/compare/v0.25.0...v0.26.0) (2026-11-27)
+
+### Features
+
+* **asc:** add in-app purchase and subscription views ([889ed85](https://github.com/tartinerlabs/mcp/commit/889ed859065e4d229af7ec0b17c97b16d285a120)), closes [#67](https://github.com/tartinerlabs/mcp/issues/67)
+
 ## [0.25.0](https://github.com/tartinerlabs/mcp/compare/v0.24.0...v0.25.0) (2026-11-27)
 
 ### Features
