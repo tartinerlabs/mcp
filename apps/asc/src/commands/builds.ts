@@ -259,3 +259,43 @@ export async function setBuildCompliance(
     changed: changes,
   };
 }
+
+export const expireInput = z.object({
+  buildId: buildIdSchema,
+  yes: z.boolean().default(false),
+});
+
+/**
+ * Expires a build so testers can no longer install it from TestFlight. This
+ * cannot be undone. Without `yes`, only shows the build and whether it is
+ * already expired.
+ */
+export async function expireBuild(
+  client: AscClient,
+  input: z.output<typeof expireInput>,
+) {
+  const document = await client.get<BuildDocument>(
+    `/v1/builds/${input.buildId}`,
+    BUILD_QUERY,
+  );
+  const build = shapeBuild(document, document.data);
+  const changes = build.expired !== true;
+  if (!input.yes) {
+    return { dryRun: true, action: "expire", build, changes };
+  }
+  if (changes) {
+    await client.patch(`/v1/builds/${input.buildId}`, {
+      data: {
+        type: "builds",
+        id: input.buildId,
+        attributes: { expired: true },
+      },
+    });
+  }
+  return {
+    dryRun: false,
+    action: "expire",
+    buildId: input.buildId,
+    changed: changes,
+  };
+}
