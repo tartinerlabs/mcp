@@ -22,6 +22,8 @@ The same file registers identifiers and devices: `bundle-ids create`, `bundle-id
 
 `apps/asc` also submits featuring nominations in `src/commands/nominations.ts`: `nominations` (Apple's `/v1/nominations` is team-wide and requires `filter[state]`, so the list defaults to `DRAFT,SUBMITTED`; `--app` filters by `relatedApps`), `nominations create`, `set` and `submit` (behind `runWrite`). A nomination is created as a draft (`submitted: false`), only a `DRAFT` accepts `set` or `submit`, and `submit` patches `submitted: true`, which Apple's docs list without describing (unverified). `create` and `set` read their options with `optsWithGlobals()`, because the parent list command also defines `--app` and `--type`.
 
+`apps/asc` also manages Apple-hosted background asset packs in `src/commands/background-assets.ts`: `background-assets` (read; `/v1/apps/<id>/backgroundAssets` and each pack's `/versions` with their internal beta, external beta and App Store releases), `background-assets upload` (behind `runWrite`: `POST /v1/backgroundAssetVersions` with only the pack relationship, since Apple numbers versions, then per file a `backgroundAssetUploadFiles` reservation (`ASSET`, or `MANIFEST` for `--manifest`) sent through `sendParts` and committed with `md5` from `build-upload.ts` as `sourceFileChecksums`) and `background-assets wait` (polls the version until it leaves `AWAITING_UPLOAD` and `PROCESSING`, with `sleep` and `now` from `createProgram`). Apple has no API to create a release; submitting a version for App Store review is a review submission item and is not built yet.
+
 ```sh
 pnpm check                          # root: biome lint + turbo typecheck/test — what CI runs, plus `pnpm build`
 pnpm test                           # root: turbo run test

@@ -46,6 +46,14 @@ import {
   setAvailability,
   setAvailabilityInput,
 } from "./commands/availability.ts";
+import {
+  backgroundAssetsInput,
+  listBackgroundAssets,
+  uploadBackgroundAsset,
+  uploadBackgroundAssetInput,
+  waitBackgroundAssetInput,
+  waitForBackgroundAsset,
+} from "./commands/background-assets.ts";
 import { buildUploadInput, uploadBuild } from "./commands/build-upload.ts";
 import {
   buildsInput,
@@ -4921,6 +4929,79 @@ export function createProgram(
         { nominationId, yes: options.yes },
         submitNomination,
       );
+    });
+
+  const backgroundAssets = program
+    .command("background-assets")
+    .description(
+      "An app's Apple-hosted background asset packs: identifier, size, and each pack's newest versions with their state and TestFlight and App Store release states.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option("--archived", "include archived packs")
+    .option("--versions <number>", "versions to show per pack, 1 to 50", "5")
+    .action(async (appId: string, options, command: Command) => {
+      await run(
+        command,
+        backgroundAssetsInput,
+        { appId, ...options },
+        listBackgroundAssets,
+      );
+    });
+
+  backgroundAssets
+    .command("upload")
+    .description(
+      "Upload a new version of an asset pack: Apple numbers the version, the archive (and --manifest, if given) is sent in the parts Apple lists, then Apple processes it; follow it with background-assets wait. Without --yes, prints the pack, its newest version and the files.",
+    )
+    .argument(
+      "<asset-pack-id>",
+      "asset pack id from the background-assets command",
+    )
+    .option("--file <path>", "the asset pack archive (required)")
+    .option("--manifest <path>", "the asset pack's manifest, if it has one")
+    .option(...YES)
+    .action(async (packId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        uploadBackgroundAssetInput,
+        { packId, ...options },
+        uploadBackgroundAsset,
+      );
+    });
+
+  backgroundAssets
+    .command("wait")
+    .description(
+      "Wait until Apple finishes processing an asset pack version, then print it. Exits 0 when it is COMPLETE and 1 when it FAILED; progress goes to stderr.",
+    )
+    .argument(
+      "<version-id>",
+      "version id from the background-assets command or upload",
+    )
+    .option("--timeout <minutes>", "give up after this long, 1 to 180", "30")
+    .option(
+      "--interval <seconds>",
+      "time between checks, 10 to 300; a rate limit backs off further",
+      "30",
+    )
+    .action(async (versionId: string, options, command: Command) => {
+      const writeErr = stderr(command);
+      const version = await run(
+        command,
+        waitBackgroundAssetInput,
+        { versionId, ...options },
+        (client, input) =>
+          waitForBackgroundAsset(client, input, {
+            sleep,
+            now,
+            progress: (line) => writeErr(`${line}\n`),
+          }),
+      );
+      if (version.state !== "COMPLETE") {
+        command.error(
+          `Asset pack version ${version.version} finished processing as ${version.state}.`,
+        );
+      }
     });
 
   return program;
