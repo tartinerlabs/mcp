@@ -26,6 +26,8 @@ import {
 import {
   buildsInput,
   complianceInput,
+  expireBuild,
+  expireInput,
   listBuilds,
   setBuildCompliance,
   type WaitDependencies,
@@ -110,8 +112,10 @@ import {
   addTestersInput,
   betaFeedbackInput,
   betaGroupsInput,
+  betaReviewInput,
   betaTestersInput,
   FEEDBACK_TYPES,
+  getBetaReview,
   listBetaFeedback,
   listBetaGroups,
   listBetaTesters,
@@ -119,6 +123,8 @@ import {
   removeTesters,
   removeTestersInput,
   setBuildNotes,
+  submitBetaReview,
+  submitBetaReviewInput,
 } from "./commands/testflight.ts";
 import { listVersions, versionsInput } from "./commands/versions.ts";
 import { PLATFORMS } from "./schemas/common.ts";
@@ -1017,6 +1023,22 @@ export function createProgram(
       );
     });
 
+  builds
+    .command("expire")
+    .description(
+      "Expire a build so testers can no longer install it from TestFlight. This cannot be undone. Without --yes, prints the build and whether it is already expired. Needs a key with the App Manager role.",
+    )
+    .argument("<build-id>", "build id from the builds command")
+    .option(...YES)
+    .action(async (buildId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        expireInput,
+        { buildId, yes: options.yes },
+        expireBuild,
+      );
+    });
+
   const testflight = program
     .command("testflight")
     .description(
@@ -1177,6 +1199,32 @@ export function createProgram(
         notesInput,
         { buildId, locale: options.locale, whatsNew, yes: options.yes },
         setBuildNotes,
+      );
+    });
+
+  const betaReview = testflight
+    .command("review")
+    .description(
+      "A build's beta app review: the submission's state (WAITING_FOR_REVIEW, IN_REVIEW, REJECTED or APPROVED, or null if never submitted) and the build's external and internal TestFlight states.",
+    )
+    .argument("<build-id>", "build id from the builds command")
+    .action(async (buildId: string, _options, command: Command) => {
+      await run(command, betaReviewInput, { buildId }, getBetaReview);
+    });
+
+  betaReview
+    .command("submit")
+    .description(
+      "Submit a build for beta app review, which it needs before external groups can test it. The app's review details (contact and, if required, demo account) must be filled in first; missing ones are named in the error. Without --yes, prints the build and any existing submission.",
+    )
+    .argument("<build-id>", "build id from the builds command")
+    .option(...YES)
+    .action(async (buildId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        submitBetaReviewInput,
+        { buildId, yes: options.yes },
+        submitBetaReview,
       );
     });
 
