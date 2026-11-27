@@ -474,6 +474,7 @@ export const submitCustomPageInput = z.object({
 /** An item that goes for review: its review submission item relationship and resource. */
 export interface ReviewItem {
   relationship:
+    | "appStoreVersion"
     | "appCustomProductPageVersion"
     | "appStoreVersionExperimentV2"
     | "appEvent";

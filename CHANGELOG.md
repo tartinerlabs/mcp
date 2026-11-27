@@ -1,3 +1,27 @@
+## [0.27.0](https://github.com/tartinerlabs/mcp/compare/v0.26.0...v0.27.0) (2026-11-27)
+
+### Features
+
+* **asc:** add version submit, release and cancel ([e0e550c](https://github.com/tartinerlabs/mcp/commit/e0e550c05458c8a30eafe9e5baf13b6c1928b352)), closes [#36](https://github.com/tartinerlabs/mcp/issues/36) [#96](https://github.com/tartinerlabs/mcp/issues/96)
+
+## [0.26.0](https://github.com/tartinerlabs/mcp/compare/v0.25.0...v0.26.0) (2026-11-27)
+
+### Features
+
+* **asc:** add in-app purchase and subscription views ([889ed85](https://github.com/tartinerlabs/mcp/commit/889ed859065e4d229af7ec0b17c97b16d285a120)), closes [#67](https://github.com/tartinerlabs/mcp/issues/67)
+
+## [0.25.0](https://github.com/tartinerlabs/mcp/compare/v0.24.0...v0.25.0) (2026-11-27)
+
+### Features
+
+* **asc:** upload builds through the API ([89374b2](https://github.com/tartinerlabs/mcp/commit/89374b24702da9995594a482230f304266767cfd)), closes [#98](https://github.com/tartinerlabs/mcp/issues/98)
+
+## [0.24.0](https://github.com/tartinerlabs/mcp/compare/v0.23.0...v0.24.0) (2026-11-27)
+
+### Features
+
+* **asc:** submit builds for beta review and expire ([4588b81](https://github.com/tartinerlabs/mcp/commit/4588b81f4b057ceeda61740fc43a554e26571790)), closes [#94](https://github.com/tartinerlabs/mcp/issues/94)
+
 ## [0.23.0](https://github.com/tartinerlabs/mcp/compare/v0.22.0...v0.23.0) (2026-11-22)
 
 ### Features
