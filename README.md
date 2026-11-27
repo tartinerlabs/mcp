@@ -359,8 +359,27 @@ Signing assets (certificates, provisioning profiles, bundle IDs and devices) use
 | `profiles create --name <name> --type IOS_APP_STORE --bundle-id <id> --certificate <ids> --out <file>` | Creates a profile for a bundle ID (the id from `bundle-ids`) and certificates and writes it to `--out`. Development and ad hoc profiles also need `--device <ids>` from `devices`. |
 | `profiles renew <profile-id> --out <file>` | Replaces an invalid or expiring profile: deletes it, then creates one with the same name, type, bundle ID, certificates and devices, or the ones given with `--certificate` and `--device` (for example after `certificates renew`). Apple has no call to regenerate a profile and is taken to refuse a second profile with the same name (unverified), so if creating the new one fails, the error says the old one is already deleted. |
 | `profiles delete <profile-id>` | Deletes a profile. This cannot be undone. |
+| `bundle-ids create --identifier com.example.app --name <name> --platform IOS` | Registers a bundle ID (`IOS`, `MAC_OS` or `UNIVERSAL`). The dry run checks the identifier is free. |
+| `bundle-ids capabilities <bundle-id-id>` | A bundle ID's enabled capabilities and their settings. |
+| `bundle-ids enable <bundle-id-id> --capability PUSH_NOTIFICATIONS` | Turns on a capability, with `--setting KEY=OPTION` where it has settings (such as `ICLOUD_VERSION=XCODE_6` or `APPLE_ID_AUTH_APP_CONSENT=PRIMARY_APP_CONSENT`). To change a capability's settings, disable and enable it again. |
+| `bundle-ids disable <bundle-id-id> --capability PUSH_NOTIFICATIONS` | Turns off a capability. |
+| `devices register --name <name> --udid <udid>` or `--file devices.txt` | Registers one device, or each `UDID,name[,platform]` line of a file (comma or tab separated, platform `ios` or `mac`, as in the Developer website's upload file), skipping UDIDs already registered. Each device counts against the membership year's device limit and cannot be removed until it renews. |
+| `signing sync --git-url <repo> --type DISTRIBUTION --profile-type IOS_APP_STORE --bundle-id com.example.app --out-dir <dir>` | Keeps the team's certificate, private key and profiles in an encrypted store in a private git repository: creates or renews what is missing, invalid or expiring within `--renew-within-days` (30), commits and pushes it, and writes the decrypted files to `--out-dir` (readable only by you). The passphrase comes from `ASC_SIGNING_PASSPHRASE` (or the variable named by `--passphrase-env`) and is never stored. `--readonly`, for CI, never creates anything, fails if the store is not usable, and needs no `--yes`. |
+| `signing nuke --git-url <repo> --type DISTRIBUTION --profile-type IOS_APP_STORE` | Revokes every certificate of the type on the team (not only the store's), deletes every profile of the given types and removes them from the store. This cannot be undone. |
+| `signing install --keychain <file> --create-keychain --cert <file> --key <file> --profile <file>` | macOS only, and needs no App Store Connect key: imports the certificate and key into the keychain (made for CI with `--create-keychain`), unlocks it, lets `codesign` use the key without a prompt and adds it to the search list; copies profiles to `~/Library/Developer/Xcode/UserData/Provisioning Profiles` (Xcode 16 and later; `--profiles-dir` to change) as `<UUID>.mobileprovision`. The keychain password comes from `ASC_KEYCHAIN_PASSWORD` (or `--password-env`) and reaches `security` on stdin, never the command line. |
+| `signing uninstall --keychain <file>` | macOS only: removes the keychain from the search list and deletes it. It never deletes the login keychain. |
 
-These write commands also change nothing without `--yes`. To import a new certificate into a keychain, combine the two files into a `.p12`, for example with `openssl x509 -inform der -in dist.cer -out dist.pem` and `openssl pkcs12 -export -inkey dist.key -in dist.pem -out dist.p12`.
+New capabilities and devices do not reach existing profiles: renew those with `profiles renew` (with `--device` for new devices), or let `signing sync` replace them.
+
+The signing store holds only encrypted files: `certs/<type>/<certificate-id>.cer.enc` and `.key.enc`, and `profiles/<profile-type>/<bundle-identifier>/<profile-id>.mobileprovision.enc`. Each is AES-256-GCM with a key derived by scrypt (N = 2^17, r = 8, p = 1) from the passphrase and a random per-file salt; the header (`ASCS`, format version 1, the scrypt parameters, salt and nonce) and the file's path in the store are authenticated, so a file cannot be moved or altered without failing to decrypt. The format is documented in `apps/asc/src/asc/store.ts`. Profiles the store makes are named `asc <profile-type> <bundle-identifier>`; development and ad hoc ones include every enabled device of their platform. A CI job runs:
+
+```sh
+asc signing sync --git-url "$STORE_URL" --type DISTRIBUTION --profile-type IOS_APP_STORE --bundle-id com.example.app --out-dir signing --readonly
+asc signing install --keychain "$RUNNER_TEMP/ci.keychain-db" --create-keychain --cert signing/<certificate-id>.cer --key signing/<certificate-id>.key --profile signing/com.example.app.IOS_APP_STORE.mobileprovision --yes
+asc signing uninstall --keychain "$RUNNER_TEMP/ci.keychain-db" --yes
+```
+
+These write commands also change nothing without `--yes`. `signing install` imports the `.cer` and key files from `certificates create` as they are.
 
 The key comes from options, or from environment variables when an option is not given. Nothing is stored: the `.p8` file is read on each run.
 
