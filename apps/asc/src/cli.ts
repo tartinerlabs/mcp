@@ -86,6 +86,15 @@ import {
   setMetadataInput,
 } from "./commands/metadata.ts";
 import {
+  DIAGNOSTIC_TYPES,
+  diagnosticLogsInput,
+  diagnosticsInput,
+  getDiagnosticLogs,
+  getMetrics,
+  listDiagnostics,
+  metricsInput,
+} from "./commands/metrics.ts";
+import {
   createPageTest,
   createPageTestInput,
   getPageTest,
@@ -153,6 +162,18 @@ import {
   submitBetaReviewInput,
 } from "./commands/testflight.ts";
 import { listVersions, versionsInput } from "./commands/versions.ts";
+import {
+  artifactsInput,
+  getRun,
+  listArtifacts,
+  listProducts,
+  listRuns,
+  listWorkflows,
+  productsInput,
+  runInput,
+  runsInput,
+  workflowsInput,
+} from "./commands/xcode-cloud.ts";
 import { PLATFORMS } from "./schemas/common.ts";
 import { classifyError } from "./utils/errors.ts";
 
@@ -1537,6 +1558,152 @@ export function createProgram(
     )
     .action(async (appId: string, options, command: Command) => {
       await run(command, statusInput, { appId, ...options }, getStatus);
+    });
+
+  program
+    .command("metrics")
+    .description(
+      "Power and performance metrics (hangs, launch time, disk writes, memory, battery and more) for an app or one build, summarised: Apple's regression and trend insights, then each metric's percentile and device datasets as version and value points.",
+    )
+    .argument("[app-id]", "numeric app ID from the apps command")
+    .option(
+      "--build <build-id>",
+      "read one build's metrics instead (id from the builds command)",
+    )
+    .option(
+      "--type <types>",
+      "only these metric types, comma-separated: DISK, HANG, BATTERY, LAUNCH, MEMORY, ANIMATION, TERMINATION, STORAGE",
+    )
+    .option(
+      "--device <types>",
+      "only this device type, as Apple names it, such as iPhone15,2",
+    )
+    .action(async (appId: string | undefined, options, command: Command) => {
+      await run(
+        command,
+        metricsInput,
+        { appId, buildId: options.build, ...options },
+        getMetrics,
+      );
+    });
+
+  const diagnostics = program
+    .command("diagnostics")
+    .description(
+      "A build's top diagnostic signatures (hangs, disk writes, launches), heaviest first. Read one signature's logs with diagnostics logs.",
+    )
+    .argument("<build-id>", "build id from the builds command")
+    .addOption(
+      new Option("--type <type>", "only this diagnostic type").choices([
+        ...DIAGNOSTIC_TYPES,
+      ]),
+    )
+    .option(...(LIMIT as [string, string, string]))
+    .action(async (buildId: string, options, command: Command) => {
+      await run(
+        command,
+        diagnosticsInput,
+        { buildId, ...options },
+        listDiagnostics,
+      );
+    });
+
+  diagnostics
+    .command("logs")
+    .description(
+      "A diagnostic signature's logs, summarised: each log's device, OS and app version, and per call stack the heaviest path of frames, marking the one Apple blames. --limit caps the number of logs.",
+    )
+    .argument("<signature-id>", "signature id from the diagnostics command")
+    .action(async (signatureId: string, _options, command: Command) => {
+      await run(
+        command,
+        diagnosticLogsInput,
+        // `diagnostics` defines --limit, so Commander hands it to the parent.
+        { signatureId, limit: command.parent?.opts().limit },
+        getDiagnosticLogs,
+      );
+    });
+
+  const xcodeCloud = program
+    .command("xcode-cloud")
+    .description(
+      "Xcode Cloud: products, workflows, build runs and, for one run, its actions, issues, failed tests and artifacts. Needs a key whose role can access Xcode Cloud.",
+    );
+
+  xcodeCloud
+    .command("products")
+    .description(
+      "Xcode Cloud products (apps and frameworks set up for Xcode Cloud) with their app. Use the id with xcode-cloud workflows.",
+    )
+    .option("--app <app-id>", "only the product of this app")
+    .addOption(
+      new Option("--type <type>", "only apps or frameworks").choices([
+        "APP",
+        "FRAMEWORK",
+      ]),
+    )
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (options, command: Command) => {
+      await run(
+        command,
+        productsInput,
+        { appId: options.app, ...options },
+        listProducts,
+      );
+    });
+
+  xcodeCloud
+    .command("workflows")
+    .description(
+      "A product's workflows: enabled or not, repository, last change and actions (build, test, analyze, archive).",
+    )
+    .argument("<product-id>", "product id from xcode-cloud products")
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (productId: string, options, command: Command) => {
+      await run(
+        command,
+        workflowsInput,
+        { productId, ...options },
+        listWorkflows,
+      );
+    });
+
+  xcodeCloud
+    .command("runs")
+    .description(
+      "A workflow's build runs, newest first: number, progress and result, start reason, branch or tag, pull request, commit and issue counts.",
+    )
+    .argument("<workflow-id>", "workflow id from xcode-cloud workflows")
+    .option(
+      "--branch <name>",
+      "only runs on this source or destination branch or tag; Apple has no such filter, so it applies to the page read",
+    )
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (workflowId: string, options, command: Command) => {
+      await run(command, runsInput, { workflowId, ...options }, listRuns);
+    });
+
+  xcodeCloud
+    .command("run")
+    .description(
+      "One build run: its status, then each action with its issues (errors, warnings, analyzer warnings, test failures) and, for a test action, its failed tests.",
+    )
+    .argument("<run-id>", "run id from xcode-cloud runs")
+    .action(async (runId: string, _options, command: Command) => {
+      await run(command, runInput, { runId }, getRun);
+    });
+
+  xcodeCloud
+    .command("artifacts")
+    .description(
+      "A build run's artifacts per action (logs, archives, result bundles): type, file name, size and a download link. Nothing is downloaded.",
+    )
+    .argument("<run-id>", "run id from xcode-cloud runs")
+    .action(async (runId: string, _options, command: Command) => {
+      await run(command, artifactsInput, { runId }, listArtifacts);
     });
 
   return program;

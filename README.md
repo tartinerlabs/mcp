@@ -319,6 +319,14 @@ node apps/aso/dist/index.js competitors diff <id> <id> --snapshot competitors-us
 | `reviews reply <review-id> --body <text>` | Posts a public developer response to a review (or `--body-file <path>`), replacing your existing one. Apple publishes it after a delay. |
 | `reviews delete-reply <review-id>` | Deletes your developer response to a review. |
 | `status <app-id>` | Where the app stands on each platform (or one, `--platform`): the live version, a newer version being prepared or in review with its build, any phased release as Apple reports it, and the newest build with its processing state. |
+| `metrics <app-id>` | Power and performance metrics (hangs, launch time, disk writes, memory, battery, animation, terminations, storage) summarised: Apple's regression and trend insights, then each metric's percentile and device datasets as version and value points. `--build <build-id>` reads one build's instead; `--type HANG,LAUNCH` and `--device <type>` narrow it. Needs no Xcode. |
+| `diagnostics <build-id>` | A build's top diagnostic signatures, heaviest first: hangs, disk writes or launches (`--type HANGS`). |
+| `diagnostics logs <signature-id>` | A signature's logs: device, OS and app version, and for each call stack the heaviest path of frames, marking the frame Apple blames (up to 3 stacks and 40 frames each). |
+| `xcode-cloud products` | Xcode Cloud products with their app (`--app <app-id>` for one app's). |
+| `xcode-cloud workflows <product-id>` | A product's workflows: enabled or not, repository, last change and actions. |
+| `xcode-cloud runs <workflow-id>` | A workflow's build runs, newest first: progress, result, start reason, branch or tag, pull request, commit and issue counts. Apple has no branch filter, so `--branch main` filters the page that was read. |
+| `xcode-cloud run <run-id>` | One build run: its status, then each action with its issues (errors, warnings, analyzer warnings, test failures) and, for a test action with failures, its failed tests with the devices they failed on. |
+| `xcode-cloud artifacts <run-id>` | A run's artifacts per action (logs, archives, result bundles): type, file name, size and download link. Nothing is downloaded. |
 
 Each list command returns one page (up to 200, `--limit`) and reports `hasMore`; when there is more, pass the result's `nextCursor` back as `--cursor` to read the next page. A 429 from Apple is reported as `[quota]` at once, without retrying, except in `builds wait`, which backs off (1 minute, doubling up to 10) and keeps waiting. Run a command with `--help` for its filters.
 

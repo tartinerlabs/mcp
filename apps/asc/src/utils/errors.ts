@@ -46,11 +46,6 @@ export class NotEditableError extends Error {
   override name = "NotEditableError";
 }
 
-/** Thrown when App Store Connect refused a write for the key's role; its message names the role needed. */
-export class PermissionError extends Error {
-  override name = "PermissionError";
-}
-
 /** Thrown when the input names something App Store Connect would reject, such as a file of an unknown size. */
 export class InvalidInputError extends Error {
   override name = "InvalidInputError";
@@ -59,6 +54,11 @@ export class InvalidInputError extends Error {
 /** Thrown when an upload or another multi-step write stops partway; its message says what was already done and its cause why it stopped. */
 export class UploadIncompleteError extends Error {
   override name = "UploadIncompleteError";
+}
+
+/** Thrown when App Store Connect refuses a request and the command knows which role it needs; its message names the role. */
+export class PermissionError extends Error {
+  override name = "PermissionError";
 }
 
 /** Thrown when `builds wait` gives up before the build finishes processing. */
