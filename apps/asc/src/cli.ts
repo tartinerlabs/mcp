@@ -221,7 +221,15 @@ import {
   submitBetaReview,
   submitBetaReviewInput,
 } from "./commands/testflight.ts";
-import { listVersions, versionsInput } from "./commands/versions.ts";
+import {
+  createVersion,
+  createVersionInput,
+  listVersions,
+  RELEASE_TYPES,
+  setVersion,
+  setVersionInput,
+  versionsInput,
+} from "./commands/versions.ts";
 import {
   artifactsInput,
   getRun,
@@ -536,6 +544,86 @@ export function createProgram(
         );
       },
     );
+
+  versions
+    .command("create")
+    .description(
+      "Create the next App Store version of an app. Refuses a version string the app already has on that platform. --copy-from copies another version's localized description, keywords, promotional text and URLs (not What's New) into the new one, one request per locale. Without --yes, prints the version and what would be copied. Needs a key with the App Manager role.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option(
+      "--app-version <version>",
+      "the version string, such as 2.5.0 (required)",
+    )
+    .addOption(
+      new Option(
+        "--platform <platform>",
+        "the platform (default: IOS)",
+      ).choices(PLATFORMS),
+    )
+    .option(
+      "--copy-from <version-id>",
+      "copy the localized metadata of this version, from the versions command",
+    )
+    .option(
+      "--copyright <text>",
+      "the copyright line, such as 2026 Example Ltd",
+    )
+    .addOption(
+      new Option("--release-type <type>", "when to release it").choices(
+        RELEASE_TYPES,
+      ),
+    )
+    .option(
+      "--release-date <date>",
+      "earliest release date for SCHEDULED, such as 2026-12-01T09:00:00Z",
+    )
+    .option(...YES)
+    .action(async (appId: string, _options, command: Command) => {
+      // The parent versions command also defines --platform.
+      const options = command.optsWithGlobals();
+      await runWrite(
+        command,
+        createVersionInput,
+        {
+          appId,
+          version: options.appVersion,
+          platform: options.platform,
+          copyFrom: options.copyFrom,
+          copyright: options.copyright,
+          releaseType: options.releaseType,
+          releaseDate: options.releaseDate,
+          yes: options.yes,
+        },
+        createVersion,
+      );
+    });
+
+  versions
+    .command("set")
+    .description(
+      "Change a version's release type (MANUAL, AFTER_APPROVAL or SCHEDULED), scheduled release date or copyright. Only a version being prepared or rejected accepts changes. Without --yes, prints the current and new values. Needs a key with the App Manager role.",
+    )
+    .argument("<version-id>", "version id from the versions command")
+    .addOption(
+      new Option("--release-type <type>", "when to release it").choices(
+        RELEASE_TYPES,
+      ),
+    )
+    .option(
+      "--release-date <date>",
+      "earliest release date for SCHEDULED, such as 2026-12-01T09:00:00Z",
+    )
+    .option("--copyright <text>", "the copyright line")
+    .option(...YES)
+    .action(async (versionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setVersionInput,
+        { versionId, ...options },
+        setVersion,
+      );
+    });
 
   const metadata = program
     .command("metadata")
