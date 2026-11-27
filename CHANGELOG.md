@@ -1,3 +1,43 @@
+## [0.29.0](https://github.com/tartinerlabs/mcp/compare/v0.28.0...v0.29.0) (2026-11-27)
+
+### Features
+
+* **asc:** manage certificates and profiles ([40a5636](https://github.com/tartinerlabs/mcp/commit/40a56369cff93d673f76770959e2650f6abd8102)), closes [#62](https://github.com/tartinerlabs/mcp/issues/62) [#99](https://github.com/tartinerlabs/mcp/issues/99)
+
+## [0.28.0](https://github.com/tartinerlabs/mcp/compare/v0.27.0...v0.28.0) (2026-11-27)
+
+### Features
+
+* **asc:** read perf metrics and Xcode Cloud runs ([a0a4d6e](https://github.com/tartinerlabs/mcp/commit/a0a4d6e437e90b1986555adc6f04e463f5c11668)), closes [#65](https://github.com/tartinerlabs/mcp/issues/65) [#66](https://github.com/tartinerlabs/mcp/issues/66)
+
+### Bug Fixes
+
+* **asc:** keep one PermissionError after merging main ([f105f1a](https://github.com/tartinerlabs/mcp/commit/f105f1a7b50395345f7490eeb0b6c655a4b79c70))
+
+## [0.27.0](https://github.com/tartinerlabs/mcp/compare/v0.26.0...v0.27.0) (2026-11-27)
+
+### Features
+
+* **asc:** add version submit, release and cancel ([e0e550c](https://github.com/tartinerlabs/mcp/commit/e0e550c05458c8a30eafe9e5baf13b6c1928b352)), closes [#36](https://github.com/tartinerlabs/mcp/issues/36) [#96](https://github.com/tartinerlabs/mcp/issues/96)
+
+## [0.26.0](https://github.com/tartinerlabs/mcp/compare/v0.25.0...v0.26.0) (2026-11-27)
+
+### Features
+
+* **asc:** add in-app purchase and subscription views ([889ed85](https://github.com/tartinerlabs/mcp/commit/889ed859065e4d229af7ec0b17c97b16d285a120)), closes [#67](https://github.com/tartinerlabs/mcp/issues/67)
+
+## [0.25.0](https://github.com/tartinerlabs/mcp/compare/v0.24.0...v0.25.0) (2026-11-27)
+
+### Features
+
+* **asc:** upload builds through the API ([89374b2](https://github.com/tartinerlabs/mcp/commit/89374b24702da9995594a482230f304266767cfd)), closes [#98](https://github.com/tartinerlabs/mcp/issues/98)
+
+## [0.24.0](https://github.com/tartinerlabs/mcp/compare/v0.23.0...v0.24.0) (2026-11-27)
+
+### Features
+
+* **asc:** submit builds for beta review and expire ([4588b81](https://github.com/tartinerlabs/mcp/commit/4588b81f4b057ceeda61740fc43a554e26571790)), closes [#94](https://github.com/tartinerlabs/mcp/issues/94)
+
 ## [0.23.0](https://github.com/tartinerlabs/mcp/compare/v0.22.0...v0.23.0) (2026-11-22)
 
 ### Features

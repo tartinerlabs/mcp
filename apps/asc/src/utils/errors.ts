@@ -61,9 +61,27 @@ export class UploadIncompleteError extends Error {
   override name = "UploadIncompleteError";
 }
 
+/** Thrown when App Store Connect refuses a request and the command knows which role it needs; its message names the role. */
+export class PermissionError extends Error {
+  override name = "PermissionError";
+}
+
 /** Thrown when `builds wait` gives up before the build finishes processing. */
 export class WaitTimeoutError extends Error {
   override name = "WaitTimeoutError";
+}
+
+/** Thrown when App Store Connect refuses a Provisioning request (certificates, profiles, bundle IDs, devices), which individual keys cannot make. */
+export class TeamKeyRequiredError extends Error {
+  override name = "TeamKeyRequiredError";
+  readonly detail: string | undefined;
+
+  constructor(cause: AscApiError) {
+    super(
+      "App Store Connect refused access to certificates, profiles, bundle IDs and devices. These need a team API key (one with an issuer ID) whose role may use Certificates, Identifiers & Profiles; individual API keys cannot use them.",
+    );
+    this.detail = inspect(cause.data).detail;
+  }
 }
 
 interface ClassifiedError {
@@ -148,6 +166,16 @@ export function classifyError(error: unknown): ClassifiedError {
   }
   if (error instanceof NotEditableError || error instanceof InvalidInputError) {
     return { kind: "invalid_input", message: error.message };
+  }
+  if (error instanceof TeamKeyRequiredError) {
+    return {
+      kind: "permission",
+      status: 403,
+      message: `${error.message}${appleDetail(error.detail)}`,
+    };
+  }
+  if (error instanceof PermissionError) {
+    return { kind: "permission", message: error.message };
   }
   if (error instanceof WaitTimeoutError) {
     return { kind: "unavailable", message: error.message };

@@ -360,6 +360,31 @@ describe("createAscClient writes", () => {
     expect(init.headers).toMatchObject({ "content-type": "application/json" });
   });
 
+  it("should ask for Apple's own media type when a GET names one", async () => {
+    const fetch = stubFetch(Response.json({ version: "1.0" }));
+    const client = await clientFor(key("TEAMKEY001", ISSUER), fetch);
+    await expect(
+      client.get(
+        "/v1/apps/1/perfPowerMetrics",
+        {},
+        { accept: "application/vnd.apple.xcode-metrics+json" },
+      ),
+    ).resolves.toEqual({ version: "1.0" });
+    fetch.mockResolvedValueOnce(Response.json({ data: [] }));
+    await client.get("/v1/apps");
+    const accept = (call: number) =>
+      (
+        (fetch.mock.calls[call] as [URL, RequestInit])[1].headers as Record<
+          string,
+          string
+        >
+      ).accept;
+    expect(accept(0)).toBe(
+      "application/vnd.apple.xcode-metrics+json, application/json",
+    );
+    expect(accept(1)).toBe("application/json");
+  });
+
   it("should DELETE and accept a 204 with no body", async () => {
     const fetch = stubFetch(new Response(null, { status: 204 }));
     const client = await clientFor(key("TEAMKEY001", ISSUER), fetch);
