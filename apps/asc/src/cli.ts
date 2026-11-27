@@ -27,6 +27,25 @@ import {
 } from "./commands/analytics.ts";
 import { API_METHODS, apiGet, apiInput, apiWrite } from "./commands/api.ts";
 import {
+  ACTIONS as APP_CLIP_ACTIONS,
+  appClipsInput,
+  BUSINESS_CATEGORIES,
+  createAdvancedExperience,
+  createAdvancedInput,
+  headerImageInput,
+  LANGUAGES,
+  listAppClips,
+  removeAdvancedExperience,
+  removeAdvancedInput,
+  reviewDetailInput,
+  setAdvancedExperience,
+  setAdvancedInput,
+  setDefaultExperience,
+  setDefaultInput,
+  setReviewDetail,
+  uploadHeaderImage,
+} from "./commands/app-clips.ts";
+import {
   appInfoInput,
   categoriesInput,
   getAppInfo,
@@ -5002,6 +5021,191 @@ export function createProgram(
           `Asset pack version ${version.version} finished processing as ${version.state}.`,
         );
       }
+    });
+
+  const appClips = program
+    .command("app-clips")
+    .description(
+      "An app's App Clips: bundle ID, each default experience with its action, locales (subtitle and header image), release version and App Review invocation URLs, and each advanced experience with its URL, status, place status, action, category, language and card. Commands that change anything need a key with the Admin or App Manager role.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .action(async (appId: string, _options, command: Command) => {
+      await run(command, appClipsInput, { appId }, listAppClips);
+    });
+
+  const action = () =>
+    new Option("--action <action>", "the App Clip card's button").choices([
+      ...APP_CLIP_ACTIONS,
+    ]);
+  const poweredBy = () =>
+    new Option(
+      "--powered-by <true|false>",
+      "whether the card says it is powered by the app",
+    ).choices(["true", "false"]);
+  const category = () =>
+    new Option(
+      "--business-category <category>",
+      "the business the experience is for",
+    ).choices([...BUSINESS_CATEGORIES]);
+  const language = (description: string) =>
+    new Option("--default-language <language>", description).choices([
+      ...LANGUAGES,
+    ]);
+
+  appClips
+    .command("default")
+    .description("An App Clip's default experience.")
+    .command("set")
+    .description(
+      "Change a default experience's --action, or one locale's --subtitle, adding the locale when it has none. Without --yes, prints the experience and the new values.",
+    )
+    .argument(
+      "<experience-id>",
+      "default experience id from the app-clips command",
+    )
+    .option("--locale <locale>", "the locale of --subtitle, such as en-US")
+    .option(
+      "--subtitle <text>",
+      "the App Clip card's subtitle, up to 56 characters",
+    )
+    .addOption(action())
+    .option(...YES)
+    .action(async (experienceId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setDefaultInput,
+        { experienceId, ...options },
+        setDefaultExperience,
+      );
+    });
+
+  appClips
+    .command("header-image")
+    .description("A default experience's App Clip card header image.")
+    .command("upload")
+    .description(
+      "Upload one locale's App Clip card header image (PNG or JPEG), replacing the one it has: the old image is deleted, the new one reserved, sent in the parts Apple lists and committed. Without --yes, prints the file and the image it replaces.",
+    )
+    .argument(
+      "<experience-id>",
+      "default experience id from the app-clips command",
+    )
+    .option("--locale <locale>", "the locale, such as en-US (required)")
+    .option("--file <path>", "the image (required)")
+    .option(...YES)
+    .action(async (experienceId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        headerImageInput,
+        { experienceId, ...options },
+        uploadHeaderImage,
+      );
+    });
+
+  appClips
+    .command("review-detail")
+    .description("The App Review details of a default experience.")
+    .command("set")
+    .description(
+      "Set the invocation URLs App Review opens to try a default experience, replacing the current ones. Without --yes, prints the current and new URLs.",
+    )
+    .argument(
+      "<experience-id>",
+      "default experience id from the app-clips command",
+    )
+    .option(
+      "--invocation-url <urls>",
+      "a URL that opens the App Clip; repeat or comma-separate for more (required)",
+      collectList,
+    )
+    .option(...YES)
+    .action(async (experienceId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        reviewDetailInput,
+        {
+          experienceId,
+          invocationUrls: options.invocationUrl,
+          yes: options.yes,
+        },
+        setReviewDetail,
+      );
+    });
+
+  const advanced = appClips
+    .command("advanced")
+    .description("An App Clip's advanced experiences, each tied to a URL.");
+
+  advanced
+    .command("create")
+    .description(
+      "Create an advanced experience for a URL, with its card's title and subtitle in the default language and its header image, which is uploaded first. Without --yes, prints the experience and the image.",
+    )
+    .argument("<app-clip-id>", "App Clip id from the app-clips command")
+    .option("--link <url>", "the URL that invokes the App Clip (required)")
+    .addOption(language("the card's language (required)"))
+    .option(
+      "--title <text>",
+      "the card's title, up to 30 characters (required)",
+    )
+    .option(
+      "--subtitle <text>",
+      "the card's subtitle, up to 56 characters (required)",
+    )
+    .option("--image <path>", "the card's header image, PNG or JPEG (required)")
+    .addOption(action())
+    .addOption(category())
+    .addOption(poweredBy())
+    .option(...YES)
+    .action(async (appClipId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        createAdvancedInput,
+        { appClipId, ...options },
+        createAdvancedExperience,
+      );
+    });
+
+  advanced
+    .command("set")
+    .description(
+      "Change an advanced experience's action, business category, default language or powered-by flag; its URL cannot change. Without --yes, prints the experience and the new values.",
+    )
+    .argument(
+      "<experience-id>",
+      "advanced experience id from the app-clips command",
+    )
+    .addOption(action())
+    .addOption(category())
+    .addOption(language("the card's language"))
+    .addOption(poweredBy())
+    .option(...YES)
+    .action(async (experienceId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setAdvancedInput,
+        { experienceId, ...options },
+        setAdvancedExperience,
+      );
+    });
+
+  advanced
+    .command("remove")
+    .description(
+      "Remove an advanced experience (Apple marks it removed). Without --yes, prints the experience.",
+    )
+    .argument(
+      "<experience-id>",
+      "advanced experience id from the app-clips command",
+    )
+    .option(...YES)
+    .action(async (experienceId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        removeAdvancedInput,
+        { experienceId, yes: options.yes },
+        removeAdvancedExperience,
+      );
     });
 
   return program;
