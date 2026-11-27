@@ -2,6 +2,7 @@ import type { AscKey } from "../schemas/common.ts";
 import {
   AscApiError,
   CredentialsError,
+  InvalidInputError,
   NetworkError,
   UnexpectedResponseError,
 } from "../utils/errors.ts";
@@ -74,8 +75,15 @@ export interface AscClient {
     operation: UploadOperation,
     part: Uint8Array<ArrayBuffer>,
   ): Promise<void>;
-  /** Reads a binary API response, such as a gzipped sales or finance report. */
-  download(path: string, query?: AscQuery): Promise<Uint8Array>;
+  /**
+   * Reads a binary API response, such as a gzipped sales or finance report;
+   * `accept` asks for another type, such as `text/csv`.
+   */
+  download(
+    path: string,
+    query?: AscQuery,
+    options?: GetOptions,
+  ): Promise<Uint8Array>;
   /**
    * Reads a file from a URL Apple's response gave, such as an analytics
    * report segment, with no token: those URLs are pre-signed.
@@ -96,6 +104,28 @@ const TOKEN_LIFETIME_S = 120;
 const TIMEOUT_MS = 30_000;
 const UPLOAD_TIMEOUT_MS = 300_000;
 const DOWNLOAD_TIMEOUT_MS = 300_000;
+/** Apple's Notary API takes the same token, on the App Store Connect host. */
+export const NOTARY_API = "https://appstoreconnect.apple.com/notary/v2";
+
+/**
+ * Resolves a path, or an absolute URL from Apple's response, and refuses any
+ * URL outside the App Store Connect API and the Notary API, so the token is
+ * never sent to another host.
+ */
+function apiUrl(path: string): URL {
+  const url = new URL(path, ASC_API);
+  if (
+    url.origin === ASC_API ||
+    (url.origin === new URL(NOTARY_API).origin &&
+      url.pathname.startsWith("/notary/"))
+  ) {
+    return url;
+  }
+  throw new InvalidInputError(
+    "Only App Store Connect API paths are accepted; the API key is never sent to another host.",
+  );
+}
+
 /** What `request` returns for a 204, which has no body by design. */
 const NO_CONTENT = Symbol("no content");
 
@@ -192,7 +222,7 @@ export async function createAscClient(
       query: AscQuery = {},
       { accept }: GetOptions = {},
     ): Promise<T> {
-      const url = new URL(path, ASC_API);
+      const url = apiUrl(path);
       for (const [name, value] of Object.entries(query)) {
         if (value === undefined) continue;
         url.searchParams.set(
@@ -210,13 +240,13 @@ export async function createAscClient(
       );
     },
     async post<T>(path: string, body: unknown): Promise<T> {
-      return json<T>(await request("POST", new URL(path, ASC_API), body), true);
+      return json<T>(await request("POST", apiUrl(path), body), true);
     },
     async patch<T>(path: string, body: unknown): Promise<T> {
-      return json<T>(await request("PATCH", new URL(path, ASC_API), body));
+      return json<T>(await request("PATCH", apiUrl(path), body));
     },
     async delete(path: string, body?: unknown): Promise<void> {
-      await request("DELETE", new URL(path, ASC_API), body);
+      await request("DELETE", apiUrl(path), body);
     },
     async upload(
       operation: UploadOperation,
@@ -256,8 +286,12 @@ export async function createAscClient(
         );
       }
     },
-    async download(path: string, query: AscQuery = {}): Promise<Uint8Array> {
-      const url = new URL(path, ASC_API);
+    async download(
+      path: string,
+      query: AscQuery = {},
+      { accept = "application/a-gzip" }: GetOptions = {},
+    ): Promise<Uint8Array> {
+      const url = apiUrl(path);
       for (const [name, value] of Object.entries(query)) {
         if (value === undefined) continue;
         url.searchParams.set(
@@ -268,7 +302,7 @@ export async function createAscClient(
       const response = await sendRequest(url, {
         headers: {
           authorization: await authorization(),
-          accept: "application/a-gzip, application/json",
+          accept: `${accept}, application/json`,
         },
         signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
       });

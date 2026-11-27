@@ -119,14 +119,14 @@ async function readBinary(path: string, platform?: (typeof PLATFORMS)[number]) {
 }
 
 /** The file's MD5, read as a stream so a large binary is never held in memory. */
-async function md5(path: string): Promise<string> {
+export async function md5(path: string): Promise<string> {
   const hash = createHash("md5");
   for await (const chunk of createReadStream(path)) hash.update(chunk);
   return hash.digest("hex");
 }
 
 /** Sends each part Apple asked for, reading only that part of the file. */
-async function sendParts(
+export async function sendParts(
   client: AscClient,
   path: string,
   fileSize: number,

@@ -12,6 +12,7 @@ import {
 import { EDITABLE_STATES as APP_INFO_EDITABLE_STATES } from "./app-info.ts";
 import { reviewDraft, submitForReview } from "./custom-pages.ts";
 import { EDITABLE_STATES } from "./metadata.ts";
+import { missingReviewDetails, readReviewDetail } from "./review-details.ts";
 
 /**
  * Release steps for an App Store version: attach a build, submit it for
@@ -47,7 +48,7 @@ interface PhasedReleaseAttributes {
 }
 
 /** The version with its app, build and phased release, as the release commands print it. */
-async function readVersion(client: AscClient, versionId: string) {
+export async function readVersion(client: AscClient, versionId: string) {
   const response = await client.get<{
     data: AscResource<VersionAttributes>;
     included?: AscResource[];
@@ -229,7 +230,7 @@ const OPEN_SUBMISSION_STATES = [
 const CANCELLABLE_STATES = new Set(["WAITING_FOR_REVIEW", "IN_REVIEW"]);
 
 /** The app's submitted review submission that holds the version, if any. */
-async function openSubmission(client: AscClient, version: Version) {
+export async function openSubmission(client: AscClient, version: Version) {
   const response = await client.get<
     AscDocument<{ state?: string; submittedDate?: string | null }>
   >("/v1/reviewSubmissions", {
@@ -274,7 +275,10 @@ const OPTIONAL_AGE_RATING_ANSWERS = new Set([
 ]);
 
 /** Unanswered age rating questions of the app info that goes for review with the version. */
-async function missingAgeRatingAnswers(client: AscClient, appId: string) {
+export async function missingAgeRatingAnswers(
+  client: AscClient,
+  appId: string,
+) {
   const appInfos = await client.get<AscDocument<{ state?: string }>>(
     `/v1/apps/${appId}/appInfos`,
     { "fields[appInfos]": ["state"], limit: 200 },
@@ -305,7 +309,10 @@ async function missingAgeRatingAnswers(client: AscClient, appId: string) {
  * them; an app without declarations passes, and one with an unfinished
  * declaration is refused so it is not published half answered.
  */
-async function missingAccessibilityAnswers(client: AscClient, appId: string) {
+export async function missingAccessibilityAnswers(
+  client: AscClient,
+  appId: string,
+) {
   const response = await client.get<
     AscDocument<Record<string, unknown> & { state?: string }>
   >(`/v1/apps/${appId}/accessibilityDeclarations`, { limit: 200 });
@@ -332,8 +339,9 @@ export const submitVersionInput = z.object({
  * Submits a version for App Review on its own: it goes into a new review
  * submission, or one being prepared that holds nothing else. Refuses a
  * version that is not being prepared or rejected, has no valid build or an
- * unanswered export compliance question, is already submitted, or whose age
- * rating or accessibility declarations have unanswered questions.
+ * unanswered export compliance question, is already submitted, whose age
+ * rating or accessibility declarations have unanswered questions, or whose
+ * App Review details leave a required field blank.
  */
 export async function submitVersion(
   client: AscClient,
@@ -390,6 +398,14 @@ export async function submitVersion(
             `${entry.questions.join(", ")} (${entry.deviceFamily ?? entry.declarationId})`,
         )
         .join("; ")}. Answer them in App Store Connect first.`,
+    );
+  }
+  const reviewDetails = missingReviewDetails(
+    await readReviewDetail(client, version.id),
+  );
+  if (reviewDetails.length > 0) {
+    throw new InvalidInputError(
+      `The App Review details leave ${reviewDetails.join(", ")} blank. Set them with review-details set first.`,
     );
   }
   const item = {

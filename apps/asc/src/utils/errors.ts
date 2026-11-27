@@ -79,6 +79,11 @@ export class TeamKeyRequiredError extends Error {
   }
 }
 
+/** Thrown when a local tool such as git or macOS `security` fails; its message names the step and never carries a secret. */
+export class LocalCommandError extends Error {
+  override name = "LocalCommandError";
+}
+
 interface ClassifiedError {
   kind: ErrorKind;
   message: string;
@@ -168,6 +173,9 @@ export function classifyError(error: unknown): ClassifiedError {
       status: 403,
       message: `${error.message}${appleDetail(error.detail)}`,
     };
+  }
+  if (error instanceof LocalCommandError) {
+    return { kind: "unavailable", message: error.message };
   }
   if (error instanceof WaitTimeoutError) {
     return { kind: "unavailable", message: error.message };

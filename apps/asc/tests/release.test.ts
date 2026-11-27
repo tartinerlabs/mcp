@@ -53,6 +53,7 @@ interface Setup {
   drafts?: { id: string; items: string[] }[];
   ageRating?: Record<string, unknown>;
   accessibility?: Record<string, unknown>[];
+  reviewDetail?: Record<string, unknown> | null;
   otherBuild?: { app?: string; platform?: string; processingState?: string };
 }
 
@@ -70,6 +71,13 @@ function releaseClient({
   drafts = [],
   ageRating = { gambling: false, kidsAgeBand: null },
   accessibility = [],
+  reviewDetail = {
+    contactFirstName: "Ada",
+    contactLastName: "Lovelace",
+    contactPhone: "+44 20 7946 0000",
+    contactEmail: "ada@example.com",
+    demoAccountRequired: false,
+  },
   otherBuild = {},
 }: Setup = {}) {
   const get = vi.fn((path: string, query: Record<string, unknown> = {}) => {
@@ -201,6 +209,15 @@ function releaseClient({
           type: "ageRatingDeclarations",
           id: "AR2",
           attributes: ageRating,
+        },
+      });
+    }
+    if (path === "/v1/appStoreVersions/V1/appStoreReviewDetail") {
+      return Promise.resolve({
+        data: reviewDetail && {
+          type: "appStoreReviewDetails",
+          id: "RD1",
+          attributes: reviewDetail,
         },
       });
     }
@@ -416,6 +433,20 @@ describe("versions submit", () => {
         ],
       },
       "supportsVoiceover (IPHONE)",
+    ],
+    [{ reviewDetail: null }, "leave contactFirstName, contactLastName"],
+    [
+      {
+        reviewDetail: {
+          contactFirstName: "Ada",
+          contactLastName: "Lovelace",
+          contactPhone: "+44 20 7946 0000",
+          contactEmail: "ada@example.com",
+          demoAccountRequired: true,
+          demoAccountName: "demo",
+        },
+      },
+      "leave demoAccountPassword blank",
     ],
   ] as [Setup, string][])("should refuse %o", async (setup, message) => {
     const { client, provider } = releaseClient(setup);

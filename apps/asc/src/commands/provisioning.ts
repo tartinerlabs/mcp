@@ -1,4 +1,4 @@
-import { access, rm, writeFile } from "node:fs/promises";
+import { access, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import * as z from "zod";
 import { type AscClient, type AscQuery, pageInfo } from "../asc/client.ts";
@@ -12,6 +12,7 @@ import {
 import {
   AscApiError,
   InvalidInputError,
+  NotFoundError,
   TeamKeyRequiredError,
   UnexpectedResponseError,
   UploadIncompleteError,
@@ -71,7 +72,7 @@ export const PROFILE_TYPES = [
 ] as const;
 
 /** Development and ad hoc profiles name the devices they install on. */
-function needsDevices(profileType: string): boolean {
+export function needsDevices(profileType: string): boolean {
   return /_(DEVELOPMENT|ADHOC)$/.test(profileType);
 }
 
@@ -130,7 +131,7 @@ interface ProfileAttributes {
  * Runs a Provisioning request; a 403 becomes a `[permission]` error saying
  * these endpoints need a team key, because individual keys cannot use them.
  */
-async function provisioning<T>(work: () => Promise<T>): Promise<T> {
+export async function provisioning<T>(work: () => Promise<T>): Promise<T> {
   try {
     return await work();
   } catch (error) {
@@ -507,6 +508,34 @@ async function readCertificate(client: AscClient, certificateId: string) {
 }
 
 /**
+ * Makes a key and CSR and asks Apple for the certificate, returning the key
+ * (PKCS#8 PEM) and certificate (DER) for the caller to keep. Nothing is
+ * written, so a caller that cannot keep them should revoke the certificate.
+ */
+export async function requestCertificate(
+  client: AscClient,
+  type: string,
+  commonName: string,
+) {
+  const { privateKeyPem, csrPem } = await createSigningRequest(commonName);
+  const created = await client.post<Single<CertificateAttributes>>(
+    "/v1/certificates",
+    {
+      data: {
+        type: "certificates",
+        attributes: { certificateType: type, csrContent: csrPem },
+      },
+    },
+  );
+  return {
+    certificate: shapeCertificate(created.data.id, created.data.attributes),
+    privateKeyPem,
+    content: () =>
+      decodeBase64(created.data.attributes?.certificateContent, "certificate"),
+  };
+}
+
+/**
  * Makes a key and CSR, writes the key file, then asks Apple for the
  * certificate and writes it. If Apple refuses, the key file is removed.
  */
@@ -754,7 +783,7 @@ export const renewProfileInput = z.object({
   yes: z.boolean().default(false),
 });
 
-interface ProfilePlan {
+export interface ProfilePlan {
   name: string;
   type: string;
   bundleId: string;
@@ -775,8 +804,8 @@ function checkDevices(plan: ProfilePlan) {
   }
 }
 
-/** Creates the profile and writes its contents to `out`. */
-async function issueProfile(client: AscClient, plan: ProfilePlan, out: string) {
+/** Creates the profile and returns it with its contents, which the caller keeps. */
+export async function requestProfile(client: AscClient, plan: ProfilePlan) {
   const created = await client.post<Single<ProfileAttributes>>("/v1/profiles", {
     data: {
       type: "profiles",
@@ -805,8 +834,17 @@ async function issueProfile(client: AscClient, plan: ProfilePlan, out: string) {
     uuid: attributes?.uuid,
     expirationDate: attributes?.expirationDate,
   };
+  return {
+    profile,
+    content: () => decodeBase64(attributes?.profileContent, "profile"),
+  };
+}
+
+/** Creates the profile and writes its contents to `out`. */
+async function issueProfile(client: AscClient, plan: ProfilePlan, out: string) {
+  const { profile, content } = await requestProfile(client, plan);
   try {
-    await writeNew(out, decodeBase64(attributes?.profileContent, "profile"));
+    await writeNew(out, content());
   } catch (error) {
     throw new UploadIncompleteError(
       `Profile ${profile.id} was created, but its file was not written; download it from the Apple Developer website or Xcode.`,
@@ -964,5 +1002,469 @@ export async function deleteProfile(
     }
     await client.delete(`/v1/profiles/${input.profileId}`);
     return { dryRun: false, action: "delete-profile", profile };
+  });
+}
+
+// ---- Bundle IDs, capabilities and devices (#132) ----
+
+/** Platforms a bundle ID or device is registered for (Apple's BundleIdPlatform). */
+export const BUNDLE_ID_PLATFORMS = ["IOS", "MAC_OS", "UNIVERSAL"] as const;
+
+/** Apple's CapabilityType values. */
+export const CAPABILITY_TYPES = [
+  "ICLOUD",
+  "IN_APP_PURCHASE",
+  "GAME_CENTER",
+  "PUSH_NOTIFICATIONS",
+  "WALLET",
+  "INTER_APP_AUDIO",
+  "MAPS",
+  "ASSOCIATED_DOMAINS",
+  "PERSONAL_VPN",
+  "APP_GROUPS",
+  "HEALTHKIT",
+  "HOMEKIT",
+  "WIRELESS_ACCESSORY_CONFIGURATION",
+  "APPLE_PAY",
+  "DATA_PROTECTION",
+  "SIRIKIT",
+  "NETWORK_EXTENSIONS",
+  "MULTIPATH",
+  "HOT_SPOT",
+  "NFC_TAG_READING",
+  "CLASSKIT",
+  "AUTOFILL_CREDENTIAL_PROVIDER",
+  "ACCESS_WIFI_INFORMATION",
+  "NETWORK_CUSTOM_PROTOCOL",
+  "COREMEDIA_HLS_LOW_LATENCY",
+  "SYSTEM_EXTENSION_INSTALL",
+  "USER_MANAGEMENT",
+  "APPLE_ID_AUTH",
+] as const;
+
+const PROFILES_NOTE =
+  "Existing profiles do not pick this up on their own: renew the profiles that need it with profiles renew.";
+
+interface BundleIdAttributes {
+  name?: string;
+  identifier?: string;
+  platform?: string;
+  seedId?: string;
+}
+
+interface CapabilityAttributes {
+  capabilityType?: string;
+  settings?: unknown;
+}
+
+interface DeviceAttributes {
+  name?: string;
+  udid?: string;
+  platform?: string;
+  status?: string;
+}
+
+function shapeBundleId(id: string, attributes: BundleIdAttributes | undefined) {
+  return {
+    id,
+    identifier: attributes?.identifier,
+    name: attributes?.name,
+    platform: attributes?.platform,
+    teamId: attributes?.seedId,
+  };
+}
+
+export const createBundleIdInput = z.object({
+  identifier: z
+    .string({ error: "Give the identifier with --identifier." })
+    .trim()
+    .regex(
+      /^[A-Za-z0-9.-]+(\.\*)?$/,
+      "Must be a reverse-DNS identifier such as com.example.app, or a wildcard such as com.example.*.",
+    ),
+  name: z
+    .string({ error: "Give a description with --name." })
+    .trim()
+    .min(1)
+    .max(255),
+  platform: z.enum(BUNDLE_ID_PLATFORMS, {
+    error: `Give --platform, one of ${BUNDLE_ID_PLATFORMS.join(", ")}.`,
+  }),
+  yes: z.boolean().default(false),
+});
+
+/** Registers a bundle ID. Without `yes`, shows whether the identifier is taken. */
+export async function createBundleId(
+  client: AscClient,
+  input: z.output<typeof createBundleIdInput>,
+) {
+  return provisioning(async () => {
+    const existing = await client.get<Collection<BundleIdAttributes>>(
+      "/v1/bundleIds",
+      { "filter[identifier]": input.identifier, limit: 200 },
+    );
+    // Apple's filter matches prefixes too, so compare exactly.
+    const taken = existing.data.find(
+      (item) => item.attributes?.identifier === input.identifier,
+    );
+    if (taken) {
+      throw new InvalidInputError(
+        `${input.identifier} is already registered as bundle ID ${taken.id}. Nothing was changed.`,
+      );
+    }
+    const bundleId = {
+      identifier: input.identifier,
+      name: input.name,
+      platform: input.platform,
+    };
+    if (!input.yes) {
+      return { dryRun: true, action: "create-bundle-id", bundleId };
+    }
+    const created = await client.post<Single<BundleIdAttributes>>(
+      "/v1/bundleIds",
+      { data: { type: "bundleIds", attributes: bundleId } },
+    );
+    return {
+      dryRun: false,
+      action: "create-bundle-id",
+      bundleId: shapeBundleId(created.data.id, created.data.attributes),
+    };
+  });
+}
+
+export const bundleIdCapabilitiesInput = z.object({
+  bundleIdId: bundleIdIdSchema,
+});
+
+async function readCapabilities(client: AscClient, bundleIdId: string) {
+  const response = await client.get<Collection<CapabilityAttributes>>(
+    `/v1/bundleIds/${bundleIdId}/bundleIdCapabilities`,
+    { limit: 200 },
+  );
+  return response.data.map(({ id, attributes }) => ({
+    id,
+    type: attributes?.capabilityType,
+    settings: attributes?.settings ?? undefined,
+  }));
+}
+
+/** A bundle ID's enabled capabilities with their settings. */
+export async function listBundleIdCapabilities(
+  client: AscClient,
+  input: z.output<typeof bundleIdCapabilitiesInput>,
+) {
+  return provisioning(async () => ({
+    bundleIdId: input.bundleIdId,
+    capabilities: await readCapabilities(client, input.bundleIdId),
+  }));
+}
+
+const capabilitySchema = z.enum(CAPABILITY_TYPES, {
+  error: `Give --capability, one of ${CAPABILITY_TYPES.join(", ")}.`,
+});
+
+export const enableCapabilityInput = z.object({
+  bundleIdId: bundleIdIdSchema,
+  capability: capabilitySchema,
+  /** KEY=OPTION pairs such as ICLOUD_VERSION=XCODE_6. */
+  setting: z
+    .array(
+      z
+        .string()
+        .trim()
+        .regex(
+          /^[A-Z0-9_]{1,60}=[A-Z0-9_]{1,60}$/,
+          "Give each --setting as KEY=OPTION, such as DATA_PROTECTION_PERMISSION_LEVEL=COMPLETE_PROTECTION.",
+        ),
+    )
+    .optional(),
+  yes: z.boolean().default(false),
+});
+
+/** Groups KEY=OPTION pairs into Apple's CapabilitySetting list. */
+function capabilitySettings(pairs: string[] | undefined) {
+  if (!pairs?.length) return undefined;
+  const byKey = new Map<string, string[]>();
+  for (const pair of pairs) {
+    const [key = "", option = ""] = pair.split("=");
+    byKey.set(key, [...(byKey.get(key) ?? []), option]);
+  }
+  return [...byKey].map(([key, options]) => ({
+    key,
+    options: options.map((option) => ({ key: option, enabled: true })),
+  }));
+}
+
+/** Turns on a capability for a bundle ID. Without `yes`, prints the current ones. */
+export async function enableCapability(
+  client: AscClient,
+  input: z.output<typeof enableCapabilityInput>,
+) {
+  return provisioning(async () => {
+    const current = await readCapabilities(client, input.bundleIdId);
+    if (current.some((item) => item.type === input.capability)) {
+      throw new InvalidInputError(
+        `${input.capability} is already enabled for bundle ID ${input.bundleIdId}. To change its settings, disable it and enable it again. Nothing was changed.`,
+      );
+    }
+    const settings = capabilitySettings(input.setting);
+    if (!input.yes) {
+      return {
+        dryRun: true,
+        action: "enable-capability",
+        bundleIdId: input.bundleIdId,
+        capability: input.capability,
+        settings,
+        current,
+      };
+    }
+    const created = await client.post<Single<CapabilityAttributes>>(
+      "/v1/bundleIdCapabilities",
+      {
+        data: {
+          type: "bundleIdCapabilities",
+          attributes: { capabilityType: input.capability, settings },
+          relationships: {
+            bundleId: { data: { type: "bundleIds", id: input.bundleIdId } },
+          },
+        },
+      },
+    );
+    return {
+      dryRun: false,
+      action: "enable-capability",
+      bundleIdId: input.bundleIdId,
+      capability: {
+        id: created.data.id,
+        type: created.data.attributes?.capabilityType,
+        settings: created.data.attributes?.settings ?? undefined,
+      },
+      note: PROFILES_NOTE,
+    };
+  });
+}
+
+export const disableCapabilityInput = z.object({
+  bundleIdId: bundleIdIdSchema,
+  capability: capabilitySchema,
+  yes: z.boolean().default(false),
+});
+
+/** Turns off a capability. Without `yes`, prints the capability. */
+export async function disableCapability(
+  client: AscClient,
+  input: z.output<typeof disableCapabilityInput>,
+) {
+  return provisioning(async () => {
+    const current = await readCapabilities(client, input.bundleIdId);
+    const capability = current.find((item) => item.type === input.capability);
+    if (!capability) {
+      throw new NotFoundError(
+        `${input.capability} is not enabled for bundle ID ${input.bundleIdId}. Nothing was changed.`,
+      );
+    }
+    if (!input.yes) {
+      return {
+        dryRun: true,
+        action: "disable-capability",
+        bundleIdId: input.bundleIdId,
+        capability,
+      };
+    }
+    await client.delete(`/v1/bundleIdCapabilities/${capability.id}`);
+    return {
+      dryRun: false,
+      action: "disable-capability",
+      bundleIdId: input.bundleIdId,
+      capability,
+      note: PROFILES_NOTE,
+    };
+  });
+}
+
+/** An iPhone, iPad or Mac UDID: hex digits, with hyphens in newer formats. */
+const udidSchema = z
+  .string()
+  .trim()
+  .regex(/^[0-9A-Fa-f-]{20,40}$/, "Must be a device UDID.");
+
+const deviceSchema = z.object({
+  name: z.string().trim().min(1).max(50),
+  udid: udidSchema,
+  platform: z.enum(BUNDLE_ID_PLATFORMS),
+});
+
+export const registerDevicesInput = z.object({
+  name: z.string().trim().min(1).max(50).optional(),
+  udid: udidSchema.optional(),
+  platform: z.enum(BUNDLE_ID_PLATFORMS).default("IOS"),
+  file: z.string().trim().min(1).optional(),
+  yes: z.boolean().default(false),
+});
+
+/** Apple's device upload file uses `ios` and `mac`; this also takes the API's names. */
+function devicePlatform(value: string | undefined, fallback: string): string {
+  const platform = (value ?? "").trim().toUpperCase();
+  if (!platform) return fallback;
+  if (platform === "MAC" || platform === "MACOS") return "MAC_OS";
+  return platform;
+}
+
+/**
+ * Reads a device list: one device per line as `UDID,name[,platform]` (comma
+ * or tab separated, as in the file the Developer website takes). A header
+ * line and lines starting with # are skipped.
+ */
+async function readDeviceFile(path: string, fallbackPlatform: string) {
+  let text: string;
+  try {
+    text = await readFile(path, "utf8");
+  } catch {
+    throw new InvalidInputError(`Could not read the --file ${path}.`);
+  }
+  const devices: z.output<typeof deviceSchema>[] = [];
+  for (const [index, raw] of text.split(/\r?\n/).entries()) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const [udid, name, platform] = line
+      .split(/\t|,/)
+      .map((cell) => cell.trim());
+    if (index === 0 && /^(device id|udid)$/i.test(udid ?? "")) continue;
+    const parsed = deviceSchema.safeParse({
+      udid,
+      name,
+      platform: devicePlatform(platform, fallbackPlatform),
+    });
+    if (!parsed.success) {
+      throw new InvalidInputError(
+        `Line ${index + 1} of ${path} is not UDID,name[,platform] with platform IOS or MAC_OS. Nothing was changed.`,
+      );
+    }
+    devices.push(parsed.data);
+  }
+  if (devices.length === 0) {
+    throw new InvalidInputError(`${path} lists no devices.`);
+  }
+  return devices;
+}
+
+/** Every registered device, following pages. */
+async function allDevices(client: AscClient) {
+  const result: Resource<DeviceAttributes>[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < 50; page++) {
+    const response = await client.get<Collection<DeviceAttributes>>(
+      "/v1/devices",
+      {
+        "fields[devices]": ["name", "udid", "platform", "status"],
+        limit: 200,
+        cursor,
+      },
+    );
+    result.push(...response.data);
+    cursor = paging(response).nextCursor;
+    if (!cursor) break;
+  }
+  return result;
+}
+
+/**
+ * Registers one device (--name, --udid) or every device in --file, skipping
+ * UDIDs already registered. Without `yes`, prints what it would register.
+ */
+export async function registerDevices(
+  client: AscClient,
+  input: z.output<typeof registerDevicesInput>,
+) {
+  let wanted: z.output<typeof deviceSchema>[];
+  if (input.file !== undefined) {
+    if (input.name !== undefined || input.udid !== undefined) {
+      throw new InvalidInputError(
+        "Give --file or --name and --udid, not both.",
+      );
+    }
+    wanted = await readDeviceFile(input.file, input.platform);
+  } else {
+    if (input.name === undefined || input.udid === undefined) {
+      throw new InvalidInputError(
+        "Give the device with --name and --udid, or several with --file.",
+      );
+    }
+    wanted = [{ name: input.name, udid: input.udid, platform: input.platform }];
+  }
+  const seen = new Set<string>();
+  for (const device of wanted) {
+    const key = device.udid.toLowerCase();
+    if (seen.has(key)) {
+      throw new InvalidInputError(
+        `UDID ${device.udid} is listed twice. Nothing was changed.`,
+      );
+    }
+    seen.add(key);
+  }
+  return provisioning(async () => {
+    const registered = new Map(
+      (await allDevices(client)).map((device) => [
+        device.attributes?.udid?.toLowerCase(),
+        device,
+      ]),
+    );
+    const alreadyRegistered = wanted
+      .filter((device) => registered.has(device.udid.toLowerCase()))
+      .map((device) => {
+        const found = registered.get(device.udid.toLowerCase());
+        return {
+          id: found?.id,
+          name: found?.attributes?.name,
+          udid: device.udid,
+          status: found?.attributes?.status,
+        };
+      });
+    const toRegister = wanted.filter(
+      (device) => !registered.has(device.udid.toLowerCase()),
+    );
+    if (!input.yes) {
+      return {
+        dryRun: true,
+        action: "register-devices",
+        toRegister,
+        alreadyRegistered,
+        warning:
+          "Each device registered counts against the membership year's device limit, even if it is disabled later; it cannot be removed until the membership year renews.",
+      };
+    }
+    const created: {
+      id: string;
+      name?: string;
+      udid?: string;
+      platform?: string;
+    }[] = [];
+    for (const device of toRegister) {
+      try {
+        const response = await client.post<Single<DeviceAttributes>>(
+          "/v1/devices",
+          { data: { type: "devices", attributes: device } },
+        );
+        created.push({
+          id: response.data.id,
+          name: response.data.attributes?.name,
+          udid: response.data.attributes?.udid,
+          platform: response.data.attributes?.platform,
+        });
+      } catch (error) {
+        if (created.length === 0) throw error;
+        throw new UploadIncompleteError(
+          `Registered ${created.length} of ${toRegister.length} devices (${created.map((item) => item.udid).join(", ")}) before ${device.udid} failed; run the command again to register the rest.`,
+          { cause: error },
+        );
+      }
+    }
+    return {
+      dryRun: false,
+      action: "register-devices",
+      registered: created,
+      alreadyRegistered,
+      note: "Existing development and ad hoc profiles do not include new devices: renew them with profiles renew --device.",
+    };
   });
 }

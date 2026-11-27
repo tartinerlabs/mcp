@@ -389,11 +389,25 @@ export interface PlannedFile {
   fileSize: number;
 }
 
+/** How `metadata push` narrows an upload plan to what the folder adds. */
+export interface PlanOptions {
+  /** Keeps only the files this returns true for, such as ones not yet placed. */
+  include?: (file: PlannedFile) => boolean;
+  /**
+   * Placement ids removed before the upload, which do not count against a
+   * group's limit; asked only after every file has been passed to `include`.
+   */
+  removing?: { has(id: string): boolean };
+  /** Returns an empty plan instead of failing when no file is left to upload. */
+  allowEmpty?: boolean;
+}
+
 /** Reads the folder: one subfolder per locale, each file placed by the group in its name or its image size. */
 export async function planUpload(
   client: AscClient,
   dir: string,
   target: UploadTarget,
+  options: PlanOptions = {},
 ) {
   let folders: string[];
   try {
@@ -486,7 +500,7 @@ export async function planUpload(
             : `${locale}/${file}: put the group of its ${placementType} video in its file name: ${typeGroups.join(", ")}.`,
         );
       }
-      files.push({
+      const planned: PlannedFile = {
         locale,
         localizationId: localizations.get(locale) ?? "",
         file,
@@ -494,9 +508,11 @@ export async function planUpload(
         placementType,
         placementGroup,
         fileSize: (await stat(path)).size,
-      });
+      };
+      if (options.include?.(planned) ?? true) files.push(planned);
     }
   }
+  if (files.length === 0 && options.allowEmpty) return { files, skipped };
   if (files.length === 0) {
     throw new InvalidInputError(
       `${dir} has no images (.png, .jpg) or videos (.mp4, .m4v, .mov) in its locale folders.`,
@@ -506,13 +522,19 @@ export async function planUpload(
   for (const locale of folders) {
     const planned = files.filter((file) => file.locale === locale);
     if (planned.length === 0) continue;
-    const existing = await listPlacements(
-      client,
-      planned[0]?.localizationId ?? "",
-      undefined,
-      target.localizationType,
-      target.placementTypes,
-    );
+    // A localization `metadata push` has yet to create has no placements.
+    const localizationId = planned[0]?.localizationId ?? "";
+    const existing = (
+      localizationId
+        ? await listPlacements(
+            client,
+            localizationId,
+            undefined,
+            target.localizationType,
+            target.placementTypes,
+          )
+        : []
+    ).filter(({ id }) => !options.removing?.has(id));
     const checked = new Set<string>();
     for (const { placementType, placementGroup } of planned) {
       const key = `${placementType} ${placementGroup}`;
@@ -795,23 +817,12 @@ export async function reorderScreenshots(
     };
   }
   if (changes) {
-    await client.post("/v1/appAssetLibraryPlacementOrderingRequests", {
-      data: {
-        type: "appAssetLibraryPlacementOrderingRequests",
-        attributes: { placementGroup: input.group },
-        relationships: {
-          orderedPlacements: {
-            data: input.placements.map((id) => ({
-              type: "appAssetLibraryPlacements",
-              id,
-            })),
-          },
-          appStoreVersionLocalization: {
-            data: { type: "appStoreVersionLocalizations", id: localization.id },
-          },
-        },
-      },
-    });
+    await orderPlacements(
+      client,
+      localization.id,
+      input.group,
+      input.placements,
+    );
   }
   return {
     dryRun: false,
@@ -822,6 +833,32 @@ export async function reorderScreenshots(
     order: input.placements,
     changed: changes,
   };
+}
+
+/** Sets the display order of one App Store version localization's placements of one type in one group. */
+export async function orderPlacements(
+  client: AscClient,
+  localizationId: string,
+  placementGroup: string,
+  placementIds: string[],
+) {
+  await client.post("/v1/appAssetLibraryPlacementOrderingRequests", {
+    data: {
+      type: "appAssetLibraryPlacementOrderingRequests",
+      attributes: { placementGroup },
+      relationships: {
+        orderedPlacements: {
+          data: placementIds.map((id) => ({
+            type: "appAssetLibraryPlacements",
+            id,
+          })),
+        },
+        appStoreVersionLocalization: {
+          data: { type: "appStoreVersionLocalizations", id: localizationId },
+        },
+      },
+    },
+  });
 }
 
 export const deleteInput = z.object({
