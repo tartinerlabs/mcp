@@ -12,6 +12,7 @@ import {
   idSchema,
   limitSchema,
 } from "../schemas/common.ts";
+import { InvalidInputError } from "../utils/errors.ts";
 
 export const groupIdSchema = idSchema("testflight groups");
 const buildIdSchema = idSchema("builds");
@@ -519,6 +520,216 @@ export async function setBuildNotes(
     action: "notes",
     buildId: input.buildId,
     locale: input.locale,
+    changed: changes,
+  };
+}
+
+interface ReviewBuildAttributes {
+  version?: string;
+  processingState?: string;
+  expired?: boolean;
+}
+
+interface ReviewBuildDocument {
+  data: AscResource<ReviewBuildAttributes>;
+  included?: AscResource[];
+}
+
+interface BetaAppReviewSubmissionAttributes {
+  betaReviewState?: string;
+  submittedDate?: string | null;
+}
+
+interface BuildBetaDetailAttributes {
+  externalBuildState?: string;
+  internalBuildState?: string;
+}
+
+/** A build, its app and its beta app review submission, if it has one. */
+async function readReview(client: AscClient, buildId: string) {
+  const document = await client.get<ReviewBuildDocument>(
+    `/v1/builds/${buildId}`,
+    {
+      "fields[builds]": [
+        "version",
+        "processingState",
+        "expired",
+        "app",
+        "betaAppReviewSubmission",
+        "buildBetaDetail",
+      ],
+      include: ["app", "betaAppReviewSubmission", "buildBetaDetail"],
+      "fields[apps]": ["name"],
+      "fields[betaAppReviewSubmissions]": ["betaReviewState", "submittedDate"],
+      "fields[buildBetaDetails]": ["externalBuildState", "internalBuildState"],
+    },
+  );
+  const { data } = document;
+  const submissionId = data.relationships?.betaAppReviewSubmission?.data?.id;
+  const submission = related<BetaAppReviewSubmissionAttributes>(
+    document,
+    data,
+    "betaAppReviewSubmission",
+  );
+  const detail = related<BuildBetaDetailAttributes>(
+    document,
+    data,
+    "buildBetaDetail",
+  );
+  return {
+    build: {
+      id: data.id,
+      version: data.attributes?.version,
+      processingState: data.attributes?.processingState,
+      expired: data.attributes?.expired,
+      appId: data.relationships?.app?.data?.id,
+      appName: related<{ name?: string }>(document, data, "app")?.name,
+    },
+    submission: submissionId
+      ? {
+          id: submissionId,
+          betaReviewState: submission?.betaReviewState,
+          submittedDate: submission?.submittedDate,
+        }
+      : null,
+    externalBuildState: detail?.externalBuildState,
+    internalBuildState: detail?.internalBuildState,
+  };
+}
+
+export const betaReviewInput = z.object({ buildId: buildIdSchema });
+
+/**
+ * A build's beta app review: the submission's state (WAITING_FOR_REVIEW,
+ * IN_REVIEW, REJECTED or APPROVED), null if it was never submitted, and the
+ * build's external and internal TestFlight states.
+ */
+export async function getBetaReview(
+  client: AscClient,
+  input: z.output<typeof betaReviewInput>,
+) {
+  return readReview(client, input.buildId);
+}
+
+interface BetaAppReviewDetailAttributes {
+  contactFirstName?: string | null;
+  contactLastName?: string | null;
+  contactPhone?: string | null;
+  contactEmail?: string | null;
+  demoAccountRequired?: boolean | null;
+  demoAccountName?: string | null;
+  demoAccountPassword?: string | null;
+}
+
+const REVIEW_CONTACT_FIELDS = {
+  contactFirstName: "contact first name",
+  contactLastName: "contact last name",
+  contactPhone: "contact phone",
+  contactEmail: "contact email",
+} as const;
+
+/**
+ * The beta app review details Apple needs before a submission that are
+ * blank. Only which ones are missing is returned: the contact details and
+ * the demo account are never printed.
+ */
+async function missingReviewDetails(client: AscClient, appId: string) {
+  const { data } = await client.get<{
+    data: AscResource<BetaAppReviewDetailAttributes>;
+  }>(`/v1/apps/${appId}/betaAppReviewDetail`, {
+    "fields[betaAppReviewDetails]": [
+      ...Object.keys(REVIEW_CONTACT_FIELDS),
+      "demoAccountRequired",
+      "demoAccountName",
+      "demoAccountPassword",
+    ],
+  });
+  const details = data.attributes ?? {};
+  const blank = (value: string | null | undefined) => !value?.trim();
+  const missing: string[] = Object.entries(REVIEW_CONTACT_FIELDS)
+    .filter(([field]) =>
+      blank(details[field as keyof typeof REVIEW_CONTACT_FIELDS]),
+    )
+    .map(([, label]) => label);
+  if (details.demoAccountRequired) {
+    if (blank(details.demoAccountName)) missing.push("demo account name");
+    if (blank(details.demoAccountPassword)) {
+      missing.push("demo account password");
+    }
+  }
+  return { missing, demoAccountRequired: details.demoAccountRequired ?? false };
+}
+
+export const submitBetaReviewInput = z.object({
+  buildId: buildIdSchema,
+  yes: YES,
+});
+
+/**
+ * Submits a build for beta app review, which a build needs before external
+ * groups can test it. Refuses a build that is expired, not processed, or
+ * whose app has blank review details, naming what is missing. Without `yes`,
+ * only shows the build, its current submission and whether it would submit.
+ */
+export async function submitBetaReview(
+  client: AscClient,
+  input: z.output<typeof submitBetaReviewInput>,
+) {
+  const { build, submission } = await readReview(client, input.buildId);
+  const changes = submission === null;
+  if (changes) {
+    if (build.expired) {
+      throw new InvalidInputError(
+        `Build ${build.version} has expired; submit a newer build.`,
+      );
+    }
+    if (build.processingState !== "VALID") {
+      throw new InvalidInputError(
+        `Build ${build.version} is ${build.processingState ?? "not processed"}; only a build that finished processing as VALID can be submitted. Wait for it with builds wait.`,
+      );
+    }
+  }
+  const details =
+    changes && build.appId
+      ? await missingReviewDetails(client, build.appId)
+      : undefined;
+  if (details && details.missing.length > 0) {
+    throw new InvalidInputError(
+      `The app's beta app review details are missing: ${details.missing.join(", ")}. Fill them in under TestFlight > Test Information in App Store Connect, then run this again.`,
+    );
+  }
+  if (!input.yes) {
+    return {
+      dryRun: true,
+      action: "submit-beta-review",
+      build,
+      submission,
+      changes,
+    };
+  }
+  let created = submission;
+  if (changes) {
+    const response = await client.post<{
+      data: AscResource<BetaAppReviewSubmissionAttributes>;
+    }>("/v1/betaAppReviewSubmissions", {
+      data: {
+        type: "betaAppReviewSubmissions",
+        relationships: {
+          build: { data: { type: "builds", id: input.buildId } },
+        },
+      },
+    });
+    created = {
+      id: response.data.id,
+      betaReviewState: response.data.attributes?.betaReviewState,
+      submittedDate: response.data.attributes?.submittedDate,
+    };
+  }
+  return {
+    dryRun: false,
+    action: "submit-beta-review",
+    buildId: input.buildId,
+    submission: created,
     changed: changes,
   };
 }
