@@ -72,7 +72,7 @@ export const PROFILE_TYPES = [
 ] as const;
 
 /** Development and ad hoc profiles name the devices they install on. */
-function needsDevices(profileType: string): boolean {
+export function needsDevices(profileType: string): boolean {
   return /_(DEVELOPMENT|ADHOC)$/.test(profileType);
 }
 
@@ -131,7 +131,7 @@ interface ProfileAttributes {
  * Runs a Provisioning request; a 403 becomes a `[permission]` error saying
  * these endpoints need a team key, because individual keys cannot use them.
  */
-async function provisioning<T>(work: () => Promise<T>): Promise<T> {
+export async function provisioning<T>(work: () => Promise<T>): Promise<T> {
   try {
     return await work();
   } catch (error) {
@@ -508,6 +508,34 @@ async function readCertificate(client: AscClient, certificateId: string) {
 }
 
 /**
+ * Makes a key and CSR and asks Apple for the certificate, returning the key
+ * (PKCS#8 PEM) and certificate (DER) for the caller to keep. Nothing is
+ * written, so a caller that cannot keep them should revoke the certificate.
+ */
+export async function requestCertificate(
+  client: AscClient,
+  type: string,
+  commonName: string,
+) {
+  const { privateKeyPem, csrPem } = await createSigningRequest(commonName);
+  const created = await client.post<Single<CertificateAttributes>>(
+    "/v1/certificates",
+    {
+      data: {
+        type: "certificates",
+        attributes: { certificateType: type, csrContent: csrPem },
+      },
+    },
+  );
+  return {
+    certificate: shapeCertificate(created.data.id, created.data.attributes),
+    privateKeyPem,
+    content: () =>
+      decodeBase64(created.data.attributes?.certificateContent, "certificate"),
+  };
+}
+
+/**
  * Makes a key and CSR, writes the key file, then asks Apple for the
  * certificate and writes it. If Apple refuses, the key file is removed.
  */
@@ -755,7 +783,7 @@ export const renewProfileInput = z.object({
   yes: z.boolean().default(false),
 });
 
-interface ProfilePlan {
+export interface ProfilePlan {
   name: string;
   type: string;
   bundleId: string;
@@ -776,8 +804,8 @@ function checkDevices(plan: ProfilePlan) {
   }
 }
 
-/** Creates the profile and writes its contents to `out`. */
-async function issueProfile(client: AscClient, plan: ProfilePlan, out: string) {
+/** Creates the profile and returns it with its contents, which the caller keeps. */
+export async function requestProfile(client: AscClient, plan: ProfilePlan) {
   const created = await client.post<Single<ProfileAttributes>>("/v1/profiles", {
     data: {
       type: "profiles",
@@ -806,8 +834,17 @@ async function issueProfile(client: AscClient, plan: ProfilePlan, out: string) {
     uuid: attributes?.uuid,
     expirationDate: attributes?.expirationDate,
   };
+  return {
+    profile,
+    content: () => decodeBase64(attributes?.profileContent, "profile"),
+  };
+}
+
+/** Creates the profile and writes its contents to `out`. */
+async function issueProfile(client: AscClient, plan: ProfilePlan, out: string) {
+  const { profile, content } = await requestProfile(client, plan);
   try {
-    await writeNew(out, decodeBase64(attributes?.profileContent, "profile"));
+    await writeNew(out, content());
   } catch (error) {
     throw new UploadIncompleteError(
       `Profile ${profile.id} was created, but its file was not written; download it from the Apple Developer website or Xcode.`,
