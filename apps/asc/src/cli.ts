@@ -231,6 +231,7 @@ import {
   submitBetaReview,
   submitBetaReviewInput,
 } from "./commands/testflight.ts";
+import { checkInput, checkVersion } from "./commands/version-check.ts";
 import {
   createVersion,
   createVersionInput,
@@ -554,6 +555,26 @@ export function createProgram(
         );
       },
     );
+
+  versions
+    .command("check")
+    .description(
+      "Report whether a version is ready to submit for App Review, changing nothing: its state, build and export compliance, open review submission, required metadata and app info per locale, screenshots per locale, age rating, accessibility declarations, App Review details, pricing and availability. Lists under blocking what to fix and exits 1 when anything blocks submission. Categories, content rights and metadata lint are marked not_available.",
+    )
+    .argument("<version-id>", "version id from the versions command")
+    .action(async (versionId: string, _options, command: Command) => {
+      const report = await run(
+        command,
+        checkInput,
+        { versionId },
+        checkVersion,
+      );
+      if (!report.ready) {
+        command.error(
+          `[invalid_input] Version ${report.version.version} is not ready to submit: ${report.blocking.length} problem(s), listed under "blocking".`,
+        );
+      }
+    });
 
   versions
     .command("create")
