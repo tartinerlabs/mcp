@@ -121,6 +121,7 @@ describe("lintListing", () => {
         locale: "ja",
         field: "keywords",
         rule: "length",
+        severity: "warning",
       }),
       expect.objectContaining({
         field: "copyright",
@@ -128,6 +129,22 @@ describe("lintListing", () => {
         severity: "warning",
       }),
       expect.objectContaining({ field: "inAppPurchases.I1", rule: "free-iap" }),
+    ]);
+  });
+
+  it("blocks a keyword field over 100 characters", async () => {
+    const result = await lint({
+      locales: [{ locale: "en-US", fields: { keywords: "ab,".repeat(34) } }],
+      copyright: `${new Date().getFullYear()} Example Ltd`,
+    });
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        locale: "en-US",
+        field: "keywords",
+        rule: "length",
+        severity: "error",
+        message: "102 characters, past Apple's limit of 100.",
+      }),
     ]);
   });
 

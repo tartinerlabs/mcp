@@ -18,8 +18,13 @@ const LIMITS: Record<string, number> = {
   description: 4000,
   whatsNew: 4000,
 };
-/** The keyword field is counted in UTF-8 bytes in App Store Connect. */
-const MAX_KEYWORD_BYTES = 100;
+/**
+ * The keyword field's limit. App Store Connect saves up to 100 characters,
+ * even when that is more than 100 UTF-8 bytes (Japanese, Chinese and Korean
+ * keywords take two to three bytes a character), so characters block and a
+ * field over 100 bytes is only a warning, in case Apple ever counts bytes.
+ */
+const MAX_KEYWORDS = 100;
 
 const PLACEHOLDER = [
   /\blorem ipsum\b/i,
@@ -197,13 +202,22 @@ export async function lintListing(
     }
     const keywords = asText(fields.keywords);
     if (keywords) {
+      const characters = [...keywords].length;
       const bytes = new TextEncoder().encode(keywords).length;
-      if (bytes > MAX_KEYWORD_BYTES) {
+      if (characters > MAX_KEYWORDS) {
         add(
           "length",
           "keywords",
-          `${bytes} bytes, past Apple's limit of ${MAX_KEYWORD_BYTES}.`,
+          `${characters} characters, past Apple's limit of ${MAX_KEYWORDS}.`,
           locale,
+        );
+      } else if (bytes > MAX_KEYWORDS) {
+        add(
+          "length",
+          "keywords",
+          `${characters} characters but ${bytes} bytes; App Store Connect accepts this, though some of Apple's documentation gives the limit as ${MAX_KEYWORDS} bytes.`,
+          locale,
+          "warning",
         );
       }
     }
