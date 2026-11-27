@@ -48,7 +48,7 @@ interface PhasedReleaseAttributes {
 }
 
 /** The version with its app, build and phased release, as the release commands print it. */
-async function readVersion(client: AscClient, versionId: string) {
+export async function readVersion(client: AscClient, versionId: string) {
   const response = await client.get<{
     data: AscResource<VersionAttributes>;
     included?: AscResource[];
@@ -230,7 +230,7 @@ const OPEN_SUBMISSION_STATES = [
 const CANCELLABLE_STATES = new Set(["WAITING_FOR_REVIEW", "IN_REVIEW"]);
 
 /** The app's submitted review submission that holds the version, if any. */
-async function openSubmission(client: AscClient, version: Version) {
+export async function openSubmission(client: AscClient, version: Version) {
   const response = await client.get<
     AscDocument<{ state?: string; submittedDate?: string | null }>
   >("/v1/reviewSubmissions", {
@@ -275,7 +275,10 @@ const OPTIONAL_AGE_RATING_ANSWERS = new Set([
 ]);
 
 /** Unanswered age rating questions of the app info that goes for review with the version. */
-async function missingAgeRatingAnswers(client: AscClient, appId: string) {
+export async function missingAgeRatingAnswers(
+  client: AscClient,
+  appId: string,
+) {
   const appInfos = await client.get<AscDocument<{ state?: string }>>(
     `/v1/apps/${appId}/appInfos`,
     { "fields[appInfos]": ["state"], limit: 200 },
@@ -306,7 +309,10 @@ async function missingAgeRatingAnswers(client: AscClient, appId: string) {
  * them; an app without declarations passes, and one with an unfinished
  * declaration is refused so it is not published half answered.
  */
-async function missingAccessibilityAnswers(client: AscClient, appId: string) {
+export async function missingAccessibilityAnswers(
+  client: AscClient,
+  appId: string,
+) {
   const response = await client.get<
     AscDocument<Record<string, unknown> & { state?: string }>
   >(`/v1/apps/${appId}/accessibilityDeclarations`, { limit: 200 });
