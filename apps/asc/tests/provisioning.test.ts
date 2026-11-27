@@ -17,6 +17,8 @@ function mockClient(overrides: Partial<AscClient> = {}): AscClient {
     patch: vi.fn(fail) as AscClient["patch"],
     delete: vi.fn(fail) as AscClient["delete"],
     upload: vi.fn(fail) as AscClient["upload"],
+    download: vi.fn(fail) as AscClient["download"],
+    downloadSigned: vi.fn(fail) as AscClient["downloadSigned"],
     ...overrides,
   };
 }
