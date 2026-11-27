@@ -1,3 +1,9 @@
+## [0.27.0](https://github.com/tartinerlabs/mcp/compare/v0.26.0...v0.27.0) (2026-11-27)
+
+### Features
+
+* **asc:** add version submit, release and cancel ([e0e550c](https://github.com/tartinerlabs/mcp/commit/e0e550c05458c8a30eafe9e5baf13b6c1928b352)), closes [#36](https://github.com/tartinerlabs/mcp/issues/36) [#96](https://github.com/tartinerlabs/mcp/issues/96)
+
 ## [0.26.0](https://github.com/tartinerlabs/mcp/compare/v0.25.0...v0.26.0) (2026-11-27)
 
 ### Features
