@@ -1,3 +1,30 @@
+## [0.31.0](https://github.com/tartinerlabs/mcp/compare/v0.30.0...v0.31.0) (2026-11-27)
+
+### Features
+
+* **asc:** add EU alternative distribution commands ([9bfaa3e](https://github.com/tartinerlabs/mcp/commit/9bfaa3efe3ee3f588c1a3281bf405af10b1bdf3c)), closes [#151](https://github.com/tartinerlabs/mcp/issues/151)
+* **asc:** add Game Center leaderboards and achievements ([bc81adb](https://github.com/tartinerlabs/mcp/commit/bc81adb936e8a9de6398a20299bf27eeefbd5f66)), closes [#148](https://github.com/tartinerlabs/mcp/issues/148)
+* **asc:** add shell completion ([6da6ff8](https://github.com/tartinerlabs/mcp/commit/6da6ff877a26993be131798fca3568ff824a1153)), closes [#143](https://github.com/tartinerlabs/mcp/issues/143)
+* **asc:** add TestFlight setup and dSYM downloads ([c0c538f](https://github.com/tartinerlabs/mcp/commit/c0c538f1d707d634ab0f91c5af00eeecc332237d)), closes [#129](https://github.com/tartinerlabs/mcp/issues/129) [#130](https://github.com/tartinerlabs/mcp/issues/130) [#131](https://github.com/tartinerlabs/mcp/issues/131) [#140](https://github.com/tartinerlabs/mcp/issues/140)
+* **asc:** add versions check ([bd65f03](https://github.com/tartinerlabs/mcp/commit/bd65f0385a7322eb58aee04db51118142ed13fca)), closes [#128](https://github.com/tartinerlabs/mcp/issues/128)
+* **asc:** add versions create and set ([1373e90](https://github.com/tartinerlabs/mcp/commit/1373e90005458fa310a13260eb5d7a3a1b0a13ee)), closes [#125](https://github.com/tartinerlabs/mcp/issues/125)
+* **asc:** create and price products and offers ([b1fc3fc](https://github.com/tartinerlabs/mcp/commit/b1fc3fc514ebae1cbcc4736cb0e8ccbf1427f0fb)), closes [#136](https://github.com/tartinerlabs/mcp/issues/136) [#137](https://github.com/tartinerlabs/mcp/issues/137) [#138](https://github.com/tartinerlabs/mcp/issues/138)
+* **asc:** install signing into a keychain ([18c4014](https://github.com/tartinerlabs/mcp/commit/18c401430bfe150ee506ed1506295135df89ed4a)), closes [#134](https://github.com/tartinerlabs/mcp/issues/134)
+* **asc:** manage App Clip experiences ([53de8d3](https://github.com/tartinerlabs/mcp/commit/53de8d3f94f44392c6acdb174d842b5525fe4c66)), closes [#147](https://github.com/tartinerlabs/mcp/issues/147)
+* **asc:** manage App Review details ([b118b82](https://github.com/tartinerlabs/mcp/commit/b118b8206bcb52ef761bf7d6379b830eed7d58b7)), closes [#127](https://github.com/tartinerlabs/mcp/issues/127)
+* **asc:** manage sandbox testers ([c6eb2bf](https://github.com/tartinerlabs/mcp/commit/c6eb2bf7b8abdbf0d9b5fb76c9a53a82411081e3)), closes [#145](https://github.com/tartinerlabs/mcp/issues/145)
+* **asc:** manage users and invitations ([bdf7291](https://github.com/tartinerlabs/mcp/commit/bdf7291f7dc1a2848d9e80e5bfe730e53491eb28)), closes [#144](https://github.com/tartinerlabs/mcp/issues/144)
+* **asc:** manage webhooks and deliveries ([d38a720](https://github.com/tartinerlabs/mcp/commit/d38a720e2106581241e05a3798ef9b155a38dc38)), closes [#146](https://github.com/tartinerlabs/mcp/issues/146)
+* **asc:** notarize macOS builds ([f461377](https://github.com/tartinerlabs/mcp/commit/f461377f621dcaee71962fee1b6f1d5147b59e17)), closes [#135](https://github.com/tartinerlabs/mcp/issues/135)
+* **asc:** pull, push and lint App Store metadata ([d076d2e](https://github.com/tartinerlabs/mcp/commit/d076d2e0642a2c1c3caf40088aa10b61aae9796d)), closes [#123](https://github.com/tartinerlabs/mcp/issues/123) [#124](https://github.com/tartinerlabs/mcp/issues/124)
+* **asc:** register bundle IDs, capabilities, devices ([c302ccd](https://github.com/tartinerlabs/mcp/commit/c302ccd1711a9abc2af99cb0945ca0774686de4e)), closes [#132](https://github.com/tartinerlabs/mcp/issues/132)
+* **asc:** send raw requests to the API ([4b1c2f3](https://github.com/tartinerlabs/mcp/commit/4b1c2f3821c5d5be2f351c6cb377833de2636ce9)), closes [#142](https://github.com/tartinerlabs/mcp/issues/142)
+* **asc:** set categories and content rights ([8e35887](https://github.com/tartinerlabs/mcp/commit/8e358871523971abc4618cfdc00e3b3077f97072)), closes [#126](https://github.com/tartinerlabs/mcp/issues/126)
+* **asc:** share signing via encrypted git store ([77c1ae6](https://github.com/tartinerlabs/mcp/commit/77c1ae6efc5ba64ef5291b0620538821b4dba75a)), closes [#133](https://github.com/tartinerlabs/mcp/issues/133)
+* **asc:** start and rerun Xcode Cloud builds ([280cd24](https://github.com/tartinerlabs/mcp/commit/280cd249bd27a1c18afb1d5de2eea256b8574c86)), closes [#141](https://github.com/tartinerlabs/mcp/issues/141)
+* **asc:** submit featuring nominations ([5b6f9f9](https://github.com/tartinerlabs/mcp/commit/5b6f9f918e00ab4c53f03cd6dac4b1cc02b5912e)), closes [#150](https://github.com/tartinerlabs/mcp/issues/150)
+* **asc:** upload background asset packs ([0887006](https://github.com/tartinerlabs/mcp/commit/0887006e86b7c2e9e8563f886649dc168baf06c3)), closes [#149](https://github.com/tartinerlabs/mcp/issues/149)
+
 ## [0.30.0](https://github.com/tartinerlabs/mcp/compare/v0.29.0...v0.30.0) (2026-11-27)
 
 ### Features
