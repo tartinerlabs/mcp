@@ -5682,14 +5682,20 @@ describe("availability set", () => {
         {
           territory: "USA",
           available: true,
+          preOrderEnabled: false,
+          releaseDate: null,
+          preOrderPublishDate: null,
           contentStatuses: ["AVAILABLE"],
-          changes: false,
+          changes: {},
         },
         {
           territory: "GBR",
           available: false,
+          preOrderEnabled: false,
+          releaseDate: null,
+          preOrderPublishDate: null,
           contentStatuses: ["CANNOT_SELL"],
-          changes: true,
+          changes: { available: true },
         },
       ],
     });

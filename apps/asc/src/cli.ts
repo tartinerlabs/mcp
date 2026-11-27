@@ -82,16 +82,49 @@ import {
   uploadEventMedia,
 } from "./commands/events.ts";
 import {
+  createGroupInput,
+  createIap,
+  createIapInput,
+  createSubscription,
+  createSubscriptionGroup,
+  createSubscriptionInput,
   getIap,
   getSubscription,
   IAP_TYPES,
+  iapAvailabilityInput,
   iapInput,
   iapListInput,
   listIaps,
   listSubscriptions,
+  localizeGroupInput,
+  localizeIap,
+  localizeIapInput,
+  localizeSubscription,
+  localizeSubscriptionGroup,
+  localizeSubscriptionInput,
+  PLAN_TYPES,
   PRODUCT_STATES,
+  priceIap,
+  priceIapInput,
+  priceSubscription,
+  priceSubscriptionInput,
+  reviewScreenshotInput,
+  SUBSCRIPTION_PERIODS,
+  setIap,
+  setIapAvailability,
+  setIapInput,
+  setSubscription,
+  setSubscriptionAvailability,
+  setSubscriptionInput,
+  submitIap,
+  submitIapInput,
+  submitSubscription,
+  submitSubscriptionInput,
+  subscriptionAvailabilityInput,
   subscriptionInput,
   subscriptionsInput,
+  uploadIapReviewScreenshot,
+  uploadSubscriptionReviewScreenshot,
 } from "./commands/iap.ts";
 import {
   getMetadata,
@@ -122,7 +155,18 @@ import {
   uploadPageTestInput,
   uploadPageTestScreenshots,
 } from "./commands/page-tests.ts";
-import { getPricing, pricingInput } from "./commands/pricing.ts";
+import {
+  getPricing,
+  pricingInput,
+  setPricing,
+  setPricingInput,
+} from "./commands/pricing.ts";
+import {
+  listPromoted,
+  promotedInput,
+  setPromoted,
+  setPromotedInput,
+} from "./commands/promoted-purchases.ts";
 import {
   bundleIdsInput,
   CERTIFICATE_TYPES,
@@ -184,6 +228,39 @@ import {
   uploadScreenshots,
 } from "./commands/screenshots.ts";
 import { getStatus, statusInput } from "./commands/status.ts";
+import {
+  CUSTOMER_ELIGIBILITIES,
+  createCustomCode,
+  createIntroOffer,
+  createIntroOfferInput,
+  createOfferCode,
+  createOfferCodeInput,
+  createPromoOffer,
+  createPromoOfferInput,
+  createWinBack,
+  createWinBackInput,
+  customCodeInput,
+  deactivateCodeInput,
+  deactivateOfferCode,
+  deleteOfferInput,
+  deletePromoOffer,
+  deleteWinBack,
+  endIntroOfferInput,
+  endIntroOffers,
+  generateCodes,
+  generateCodesInput,
+  listOffers,
+  OFFER_DURATIONS,
+  OFFER_ELIGIBILITIES,
+  OFFER_MODES,
+  offersInput,
+  saveCodeBatch,
+  saveCodesInput,
+  setPromoOffer,
+  setPromoOfferInput,
+  setWinBack,
+  setWinBackInput,
+} from "./commands/subscription-offers.ts";
 import {
   addBuildInput,
   addBuildToGroup,
@@ -558,10 +635,10 @@ export function createProgram(
       );
     });
 
-  program
+  const pricing = program
     .command("pricing")
     .description(
-      "An app's price schedule: its base territory and currency, the prices set by hand (current and scheduled) and the prices Apple derives for every other territory, each with customer price, proceeds and start and end dates. Prices can only be changed in App Store Connect.",
+      "An app's price schedule: its base territory and currency, the prices set by hand (current and scheduled) and the prices Apple derives for every other territory, each with customer price, proceeds and start and end dates.",
     )
     .argument("<app-id>", "numeric app ID from the apps command")
     .option(
@@ -570,6 +647,37 @@ export function createProgram(
     )
     .action(async (appId: string, options, command: Command) => {
       await run(command, pricingInput, { appId, ...options }, getPricing);
+    });
+
+  pricing
+    .command("set")
+    .description(
+      "Replace an app's price schedule: the base territory's price, which Apple equalizes to every other territory, and any territories priced by hand, from --start-date or now. Prices are Apple's price points, so each is matched to the nearest. Scheduled changes are kept unless --drop-scheduled. Without --yes, prints the current and new manual prices.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option(
+      "--base-territory <code>",
+      "the territory --price is in, such as USA (required)",
+    )
+    .option(
+      "--price <amount>",
+      "the customer price there, matched to the nearest price point (required)",
+    )
+    .option(
+      "--override <territory=price>",
+      "price a territory by hand instead, such as GBR=2.99; comma-separated or repeated",
+      collectList,
+    )
+    .option("--start-date <date>", "when the new price starts (default: now)")
+    .option("--drop-scheduled", "drop price changes scheduled for later")
+    .option(...YES)
+    .action(async (appId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setPricingInput,
+        { appId, ...options },
+        setPricing,
+      );
     });
 
   const availability = program
@@ -585,7 +693,7 @@ export function createProgram(
   availability
     .command("set")
     .description(
-      "Add an app to territories (--available) or remove it from them (--no-available). Without --yes, prints each territory's current availability. Needs a key with the App Manager role.",
+      "Add an app to territories (--available) or remove it from them (--no-available), and turn pre-orders on or off there (--pre-order, --no-pre-order) with their --release-date. Without --yes, prints each territory's current availability, pre-order and release date. Needs a key with the App Manager role.",
     )
     .argument("<app-id>", "numeric app ID from the apps command")
     .option(
@@ -595,6 +703,12 @@ export function createProgram(
     )
     .option("--available", "make the app available in these territories")
     .option("--no-available", "remove the app from these territories")
+    .option("--pre-order", "offer the app for pre-order there")
+    .option("--no-pre-order", "end the pre-order there")
+    .option(
+      "--release-date <date>",
+      "the release date there, such as 2026-12-01",
+    )
     .option(...YES)
     .action(async (appId: string, options, command: Command) => {
       await runWrite(
@@ -604,6 +718,8 @@ export function createProgram(
           appId,
           territories: options.territory ?? [],
           available: options.available,
+          preOrder: options.preOrder,
+          releaseDate: options.releaseDate,
           yes: options.yes,
         },
         setAvailability,
@@ -613,7 +729,7 @@ export function createProgram(
   const iap = program
     .command("iap")
     .description(
-      "An app's in-app purchases: reference name, product ID, type and review state. A product missing from the app is often one never submitted for review. Read only: change products in App Store Connect.",
+      "An app's in-app purchases: reference name, product ID, type and review state. A product missing from the app is often one never submitted for review. Commands that change anything need a key with the App Manager role.",
     )
     .argument("<app-id>", "numeric app ID from the apps command")
     .option(
@@ -643,7 +759,7 @@ export function createProgram(
   const subscriptions = program
     .command("subscriptions")
     .description(
-      "An app's subscription groups, each with its subscriptions' reference name, product ID, period, level and review state. Read only: change subscriptions in App Store Connect.",
+      "An app's subscription groups, each with its subscriptions' reference name, product ID, period, level and review state. Commands that change anything need a key with the App Manager role.",
     )
     .argument("<app-id>", "numeric app ID from the apps command")
     .action(async (appId: string, _options, command: Command) => {
@@ -665,6 +781,785 @@ export function createProgram(
         subscriptionInput,
         { subscriptionId },
         getSubscription,
+      );
+    });
+
+  const PRICE_OPTIONS = {
+    base: [
+      "--base-territory <code>",
+      "the territory --price is in, such as USA (required)",
+    ],
+    price: [
+      "--price <amount>",
+      "the customer price there, matched to the nearest of Apple's price points (required)",
+    ],
+    override: [
+      "--override <territory=price>",
+      "price a territory by hand instead, such as GBR=3.99; comma-separated or repeated",
+    ],
+  } as const;
+
+  iap
+    .command("create")
+    .description(
+      "Create an in-app purchase; add a localization, price, availability and review screenshot, then submit it. Without --yes, prints what would be created.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .addOption(
+      new Option("--type <type>", "the product type (required)").choices([
+        ...IAP_TYPES,
+      ]),
+    )
+    .option("--product-id <id>", "the product ID the app uses (required)")
+    .option(
+      "--reference-name <name>",
+      "the name in App Store Connect (required)",
+    )
+    .option("--family-sharable", "allow Family Sharing (cannot be undone)")
+    .option("--review-note <text>", "a note for App Review")
+    .option(...YES)
+    .action(async (appId: string, _options, command: Command) => {
+      // The iap list command also has --type, and Commander gives the value to it.
+      await runWrite(
+        command,
+        createIapInput,
+        { appId, ...command.optsWithGlobals() },
+        createIap,
+      );
+    });
+
+  iap
+    .command("set")
+    .description(
+      "Change an in-app purchase's reference name, review note or Family Sharing. Without --yes, prints the current and new values.",
+    )
+    .argument("<iap-id>", "in-app purchase id from the iap command")
+    .option("--reference-name <name>", "the name in App Store Connect")
+    .option("--review-note <text>", "a note for App Review")
+    .option("--family-sharable", "allow Family Sharing (cannot be undone)")
+    .option(...YES)
+    .action(async (iapId: string, options, command: Command) => {
+      await runWrite(command, setIapInput, { iapId, ...options }, setIap);
+    });
+
+  iap
+    .command("localize")
+    .description(
+      "Set one locale's display name and description of an in-app purchase, adding the locale if it is new. Without --yes, prints the current and new values.",
+    )
+    .argument("<iap-id>", "in-app purchase id from the iap command")
+    .option("--locale <locale>", "such as en-US (required)")
+    .option("--name <name>", "the display name, up to 35 characters (required)")
+    .option("--description <text>", "the description, up to 55 characters")
+    .option(...YES)
+    .action(async (iapId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        localizeIapInput,
+        { iapId, ...options },
+        localizeIap,
+      );
+    });
+
+  iap
+    .command("price")
+    .description(
+      "Replace an in-app purchase's price schedule: the base territory's price, which Apple equalizes to every other territory, and any territories priced by hand. Prices are Apple's price points, so each is matched to the nearest. Scheduled changes are kept unless --drop-scheduled. Without --yes, prints the current and new manual prices.",
+    )
+    .argument("<iap-id>", "in-app purchase id from the iap command")
+    .option(...PRICE_OPTIONS.base)
+    .option(...PRICE_OPTIONS.price)
+    .option(...PRICE_OPTIONS.override, collectList)
+    .option("--start-date <date>", "when the new price starts (default: now)")
+    .option("--drop-scheduled", "drop price changes scheduled for later")
+    .option(...YES)
+    .action(async (iapId: string, options, command: Command) => {
+      await runWrite(command, priceIapInput, { iapId, ...options }, priceIap);
+    });
+
+  iap
+    .command("availability")
+    .description(
+      "Set the territories an in-app purchase is sold in, replacing the current list. Without --yes, prints the territories added and removed.",
+    )
+    .argument("<iap-id>", "in-app purchase id from the iap command")
+    .option(
+      "--territory <codes>",
+      "alpha-3 territory codes, comma-separated or repeated",
+      collectList,
+    )
+    .option("--all", "every App Store territory")
+    .option(
+      "--available-in-new-territories",
+      "join territories Apple adds later",
+    )
+    .option("--no-available-in-new-territories", "do not join them")
+    .option(...YES)
+    .action(async (iapId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        iapAvailabilityInput,
+        { iapId, ...options, territories: options.territory ?? [] },
+        setIapAvailability,
+      );
+    });
+
+  iap
+    .command("review-screenshot")
+    .description("The screenshot App Review sees for an in-app purchase.")
+    .command("upload")
+    .description(
+      "Upload the review screenshot, replacing the old one. Without --yes, prints the file and the screenshot it replaces.",
+    )
+    .argument("<iap-id>", "in-app purchase id from the iap command")
+    .option("--file <path>", "the PNG or JPEG image (required)")
+    .option(...YES)
+    .action(async (id: string, options, command: Command) => {
+      await runWrite(
+        command,
+        reviewScreenshotInput,
+        { id, ...options },
+        uploadIapReviewScreenshot,
+      );
+    });
+
+  iap
+    .command("submit")
+    .description(
+      "Submit an in-app purchase for review. A product's first submission is reviewed with the next app version submitted. Without --yes, prints the product and its state.",
+    )
+    .argument("<iap-id>", "in-app purchase id from the iap command")
+    .option(...YES)
+    .action(async (iapId: string, options, command: Command) => {
+      await runWrite(command, submitIapInput, { iapId, ...options }, submitIap);
+    });
+
+  const group = subscriptions
+    .command("group")
+    .description("Subscription groups: create and localize them.");
+
+  group
+    .command("create")
+    .description(
+      "Create a subscription group. Without --yes, prints the group and how many the app has.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option(
+      "--reference-name <name>",
+      "the name in App Store Connect (required)",
+    )
+    .option(...YES)
+    .action(async (appId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        createGroupInput,
+        { appId, ...options },
+        createSubscriptionGroup,
+      );
+    });
+
+  group
+    .command("localize")
+    .description(
+      "Set one locale's display name of a subscription group, and the app name shown with it. Without --yes, prints the current and new values.",
+    )
+    .argument("<group-id>", "group id from the subscriptions command")
+    .option("--locale <locale>", "such as en-US (required)")
+    .option("--name <name>", "the group's display name (required)")
+    .option("--custom-app-name <name>", "the app name shown with the group")
+    .option(...YES)
+    .action(async (groupId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        localizeGroupInput,
+        { groupId, ...options },
+        localizeSubscriptionGroup,
+      );
+    });
+
+  subscriptions
+    .command("create")
+    .description(
+      "Create an auto-renewable subscription in a group; add a localization, price, availability and review screenshot, then submit it. Without --yes, prints it with the group's other subscriptions.",
+    )
+    .argument("<group-id>", "group id from the subscriptions command")
+    .option("--product-id <id>", "the product ID the app uses (required)")
+    .option(
+      "--reference-name <name>",
+      "the name in App Store Connect (required)",
+    )
+    .addOption(
+      new Option("--period <period>", "the billing period (required)").choices([
+        ...SUBSCRIPTION_PERIODS,
+      ]),
+    )
+    .option("--group-level <level>", "its level in the group, 1 the highest")
+    .option("--family-sharable", "allow Family Sharing (cannot be undone)")
+    .option("--review-note <text>", "a note for App Review")
+    .option(...YES)
+    .action(async (groupId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        createSubscriptionInput,
+        { groupId, ...options },
+        createSubscription,
+      );
+    });
+
+  subscriptions
+    .command("set")
+    .description(
+      "Change a subscription's reference name, period, level, Family Sharing or review note. Without --yes, prints the current and new values.",
+    )
+    .argument(
+      "<subscription-id>",
+      "subscription id from the subscriptions command",
+    )
+    .option("--reference-name <name>", "the name in App Store Connect")
+    .addOption(
+      new Option("--period <period>", "the billing period").choices([
+        ...SUBSCRIPTION_PERIODS,
+      ]),
+    )
+    .option("--group-level <level>", "its level in the group, 1 the highest")
+    .option("--family-sharable", "allow Family Sharing (cannot be undone)")
+    .option("--review-note <text>", "a note for App Review")
+    .option(...YES)
+    .action(async (subscriptionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setSubscriptionInput,
+        { subscriptionId, ...options },
+        setSubscription,
+      );
+    });
+
+  subscriptions
+    .command("localize")
+    .description(
+      "Set one locale's display name and description of a subscription, adding the locale if it is new. Without --yes, prints the current and new values.",
+    )
+    .argument(
+      "<subscription-id>",
+      "subscription id from the subscriptions command",
+    )
+    .option("--locale <locale>", "such as en-US (required)")
+    .option("--name <name>", "the display name, up to 35 characters (required)")
+    .option("--description <text>", "the description, up to 55 characters")
+    .option(...YES)
+    .action(async (subscriptionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        localizeSubscriptionInput,
+        { subscriptionId, ...options },
+        localizeSubscription,
+      );
+    });
+
+  subscriptions
+    .command("price")
+    .description(
+      "Price a subscription in every territory from the base territory's price, using Apple's equalized price points, with any territories priced by hand. Existing subscribers keep their price unless --no-preserve-current-price; then Apple tells them, and asks for consent to an increase where required. Without --yes, prints the current, scheduled and new prices.",
+    )
+    .argument(
+      "<subscription-id>",
+      "subscription id from the subscriptions command",
+    )
+    .option(...PRICE_OPTIONS.base)
+    .option(...PRICE_OPTIONS.price)
+    .option(...PRICE_OPTIONS.override, collectList)
+    .option("--start-date <date>", "when the new price starts (default: now)")
+    .option(
+      "--no-preserve-current-price",
+      "move existing subscribers to the new price too",
+    )
+    .option(...YES)
+    .action(async (subscriptionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        priceSubscriptionInput,
+        { subscriptionId, ...options },
+        priceSubscription,
+      );
+    });
+
+  subscriptions
+    .command("availability")
+    .description(
+      "Set the territories a subscription is sold in, replacing the current list. Without --yes, prints the territories added and removed.",
+    )
+    .argument(
+      "<subscription-id>",
+      "subscription id from the subscriptions command",
+    )
+    .option(
+      "--territory <codes>",
+      "alpha-3 territory codes, comma-separated or repeated",
+      collectList,
+    )
+    .option("--all", "every App Store territory")
+    .option(
+      "--available-in-new-territories",
+      "join territories Apple adds later",
+    )
+    .option("--no-available-in-new-territories", "do not join them")
+    .addOption(
+      new Option("--plan-type <type>", "the payment plan")
+        .choices([...PLAN_TYPES])
+        .default("UPFRONT"),
+    )
+    .option(...YES)
+    .action(async (subscriptionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        subscriptionAvailabilityInput,
+        { subscriptionId, ...options, territories: options.territory ?? [] },
+        setSubscriptionAvailability,
+      );
+    });
+
+  subscriptions
+    .command("review-screenshot")
+    .description("The screenshot App Review sees for a subscription.")
+    .command("upload")
+    .description(
+      "Upload the review screenshot, replacing the old one. Without --yes, prints the file and the screenshot it replaces.",
+    )
+    .argument(
+      "<subscription-id>",
+      "subscription id from the subscriptions command",
+    )
+    .option("--file <path>", "the PNG or JPEG image (required)")
+    .option(...YES)
+    .action(async (id: string, options, command: Command) => {
+      await runWrite(
+        command,
+        reviewScreenshotInput,
+        { id, ...options },
+        uploadSubscriptionReviewScreenshot,
+      );
+    });
+
+  subscriptions
+    .command("submit")
+    .description(
+      "Submit a subscription for review. A group's first subscription is reviewed with the next app version submitted. Without --yes, prints the subscription and its state.",
+    )
+    .argument(
+      "<subscription-id>",
+      "subscription id from the subscriptions command",
+    )
+    .option(...YES)
+    .action(async (subscriptionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        submitSubscriptionInput,
+        { subscriptionId, ...options },
+        submitSubscription,
+      );
+    });
+
+  const offers = subscriptions
+    .command("offers")
+    .description(
+      "A subscription's offers: introductory offers, promotional offers, offer codes with their one-time code batches and custom codes (never the one-time codes) and win-back offers.",
+    )
+    .argument(
+      "<subscription-id>",
+      "subscription id from the subscriptions command",
+    )
+    .action(async (subscriptionId: string, _options, command: Command) => {
+      await run(command, offersInput, { subscriptionId }, listOffers);
+    });
+
+  /** The terms every offer create command takes. */
+  function offerTermOptions(target: Command): Command {
+    return target
+      .addOption(
+        new Option("--mode <mode>", "the offer type (required)").choices([
+          ...OFFER_MODES,
+        ]),
+      )
+      .addOption(
+        new Option(
+          "--duration <duration>",
+          "each period's length (required)",
+        ).choices([...OFFER_DURATIONS]),
+      )
+      .option("--periods <count>", "how many periods (default: 1)")
+      .option(
+        "--base-territory <code>",
+        "the territory --price is in, such as USA (paid offers)",
+      )
+      .option(
+        "--price <amount>",
+        "the offer price there, equalized to the subscription's other territories (paid offers)",
+      )
+      .option(...PRICE_OPTIONS.override, collectList);
+  }
+
+  const intro = offers
+    .command("intro")
+    .description("Introductory offers, one per territory.");
+
+  offerTermOptions(
+    intro
+      .command("create")
+      .description(
+        "Create an introductory offer in every territory the subscription is priced in, or those given. Without --yes, prints the offer and its price in each territory.",
+      )
+      .argument(
+        "<subscription-id>",
+        "subscription id from the subscriptions command",
+      ),
+  )
+    .option(
+      "--territory <codes>",
+      "only these territories, comma-separated or repeated",
+      collectList,
+    )
+    .option("--start-date <date>", "when the offer starts (default: now)")
+    .option("--end-date <date>", "when it ends (default: never)")
+    .option(...YES)
+    .action(async (subscriptionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        createIntroOfferInput,
+        { subscriptionId, ...options, territories: options.territory },
+        createIntroOffer,
+      );
+    });
+
+  intro
+    .command("end")
+    .description(
+      "End a subscription's introductory offers, in every territory or those given: on --end-date, or at once by deleting them. Without --yes, prints the offers.",
+    )
+    .argument(
+      "<subscription-id>",
+      "subscription id from the subscriptions command",
+    )
+    .option(
+      "--territory <codes>",
+      "only these territories, comma-separated or repeated",
+      collectList,
+    )
+    .option("--end-date <date>", "when they end (default: delete them now)")
+    .option(...YES)
+    .action(async (subscriptionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        endIntroOfferInput,
+        { subscriptionId, ...options, territories: options.territory },
+        endIntroOffers,
+      );
+    });
+
+  const promo = offers
+    .command("promo")
+    .description(
+      "Promotional offers, which the app presents with a signature.",
+    );
+
+  offerTermOptions(
+    promo
+      .command("create")
+      .description(
+        "Create a promotional offer priced in every territory the subscription is priced in. Without --yes, prints the offer and its prices.",
+      )
+      .argument(
+        "<subscription-id>",
+        "subscription id from the subscriptions command",
+      )
+      .option("--name <name>", "the reference name (required)")
+      .option("--code <id>", "the offer identifier the app uses (required)"),
+  )
+    .option(...YES)
+    .action(async (subscriptionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        createPromoOfferInput,
+        { subscriptionId, ...options },
+        createPromoOffer,
+      );
+    });
+
+  promo
+    .command("set")
+    .description(
+      "Replace a paid promotional offer's prices. Without --yes, prints the offer and its new prices.",
+    )
+    .argument("<offer-id>", "offer id from subscriptions offers")
+    .option(...PRICE_OPTIONS.base)
+    .option(...PRICE_OPTIONS.price)
+    .option(...PRICE_OPTIONS.override, collectList)
+    .option(...YES)
+    .action(async (offerId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setPromoOfferInput,
+        { offerId, ...options },
+        setPromoOffer,
+      );
+    });
+
+  promo
+    .command("delete")
+    .description("Delete a promotional offer. Without --yes, prints it.")
+    .argument("<offer-id>", "offer id from subscriptions offers")
+    .option(...YES)
+    .action(async (offerId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        deleteOfferInput,
+        { offerId, ...options },
+        deletePromoOffer,
+      );
+    });
+
+  const offerCodes = offers
+    .command("offer-codes")
+    .description("Offer codes, with one-time and custom codes.");
+
+  offerTermOptions(
+    offerCodes
+      .command("create")
+      .description(
+        "Create an offer code priced in every territory the subscription is priced in; then generate one-time codes or add custom codes. Without --yes, prints the offer and its prices.",
+      )
+      .argument(
+        "<subscription-id>",
+        "subscription id from the subscriptions command",
+      )
+      .option("--name <name>", "the reference name (required)")
+      .option(
+        "--eligibility <customers>",
+        `who may redeem it, comma-separated: ${CUSTOMER_ELIGIBILITIES.join(", ")} (required)`,
+        collectList,
+      )
+      .addOption(
+        new Option(
+          "--offer-eligibility <rule>",
+          "how it combines with introductory offers",
+        )
+          .choices([...OFFER_ELIGIBILITIES])
+          .default("STACK_WITH_INTRO_OFFERS"),
+      )
+      .option("--auto-renew", "renew at the regular price afterwards")
+      .option("--no-auto-renew", "end the subscription afterwards"),
+  )
+    .option(...YES)
+    .action(async (subscriptionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        createOfferCodeInput,
+        {
+          subscriptionId,
+          ...options,
+          eligibility: options.eligibility ?? [],
+        },
+        createOfferCode,
+      );
+    });
+
+  offerCodes
+    .command("generate")
+    .description(
+      "Generate a batch of one-time codes and write them to a new file (mode 600); the codes are never printed. Without --yes, prints the batch it would ask for.",
+    )
+    .argument("<offer-code-id>", "offer code id from subscriptions offers")
+    .option("--count <number>", "how many codes (required)")
+    .option("--expires <date>", "when the codes expire (required)")
+    .addOption(
+      new Option("--environment <environment>", "where the codes work")
+        .choices(["PRODUCTION", "SANDBOX"])
+        .default("PRODUCTION"),
+    )
+    .option("--out <file>", "a new file for the codes (required)")
+    .option(...YES)
+    .action(async (offerCodeId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        generateCodesInput,
+        { offerCodeId, ...options },
+        generateCodes,
+      );
+    });
+
+  offerCodes
+    .command("codes")
+    .description(
+      "Write a batch's one-time codes to a new file (mode 600); the codes are never printed.",
+    )
+    .argument("<batch-id>", "one-time code batch id from subscriptions offers")
+    .option("--out <file>", "a new file for the codes (required)")
+    .action(async (batchId: string, options, command: Command) => {
+      await run(
+        command,
+        saveCodesInput,
+        { batchId, ...options },
+        saveCodeBatch,
+      );
+    });
+
+  offerCodes
+    .command("custom")
+    .description(
+      "Add a custom code, such as SUMMER, that customers can redeem up to --count times. Without --yes, prints it.",
+    )
+    .argument("<offer-code-id>", "offer code id from subscriptions offers")
+    .option("--code <code>", "the code customers type (required)")
+    .option("--count <number>", "how many redemptions (required)")
+    .option("--expires <date>", "when it expires")
+    .option(...YES)
+    .action(async (offerCodeId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        customCodeInput,
+        { offerCodeId, ...options },
+        createCustomCode,
+      );
+    });
+
+  offerCodes
+    .command("deactivate")
+    .description(
+      "End an offer code: none of its codes can be redeemed any more, and it cannot be turned back on. Without --yes, prints it.",
+    )
+    .argument("<offer-code-id>", "offer code id from subscriptions offers")
+    .option(...YES)
+    .action(async (offerCodeId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        deactivateCodeInput,
+        { offerCodeId, ...options },
+        deactivateOfferCode,
+      );
+    });
+
+  const winBack = offers
+    .command("win-back")
+    .description("Win-back offers for lapsed subscribers.");
+
+  /** Who a win-back offer reaches and when. */
+  function winBackOptions(target: Command): Command {
+    return target
+      .option(
+        "--paid-months <months>",
+        "months the customer paid for before lapsing",
+      )
+      .option("--since-min <months>", "lapsed at least this many months ago")
+      .option("--since-max <months>", "lapsed at most this many months ago")
+      .option("--wait-months <months>", "months between offers to one customer")
+      .option("--start-date <date>", "when the offer starts")
+      .option("--end-date <date>", "when it ends")
+      .addOption(
+        new Option(
+          "--priority <priority>",
+          "against other win-back offers",
+        ).choices(["HIGH", "NORMAL"]),
+      )
+      .addOption(
+        new Option(
+          "--promotion-intent <intent>",
+          "whether the App Store promotes it",
+        ).choices(["NOT_PROMOTED", "USE_AUTO_GENERATED_ASSETS"]),
+      );
+  }
+
+  winBackOptions(
+    offerTermOptions(
+      winBack
+        .command("create")
+        .description(
+          "Create a win-back offer priced in every territory the subscription is priced in; needs --paid-months, --since-min and --start-date. Without --yes, prints the offer and its prices.",
+        )
+        .argument(
+          "<subscription-id>",
+          "subscription id from the subscriptions command",
+        )
+        .option("--reference-name <name>", "the reference name (required)")
+        .option("--offer-id <id>", "the offer identifier (required)"),
+    ),
+  )
+    .option(...YES)
+    .action(async (subscriptionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        createWinBackInput,
+        { subscriptionId, ...options },
+        createWinBack,
+      );
+    });
+
+  winBackOptions(
+    winBack
+      .command("set")
+      .description(
+        "Change a win-back offer's eligibility, dates, priority or promotion. Without --yes, prints the current and new values.",
+      )
+      .argument("<offer-id>", "offer id from subscriptions offers"),
+  )
+    .option(...YES)
+    .action(async (offerId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setWinBackInput,
+        { offerId, ...options },
+        setWinBack,
+      );
+    });
+
+  winBack
+    .command("delete")
+    .description("Delete a win-back offer. Without --yes, prints it.")
+    .argument("<offer-id>", "offer id from subscriptions offers")
+    .option(...YES)
+    .action(async (offerId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        deleteOfferInput,
+        { offerId, ...options },
+        deleteWinBack,
+      );
+    });
+
+  const promoted = program
+    .command("promoted-purchases")
+    .description(
+      "An app's promoted in-app purchases and subscriptions, in the order its product page shows them, each with whether it is enabled, visible to everyone and its review state.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .action(async (appId: string, _options, command: Command) => {
+      await run(command, promotedInput, { appId }, listPromoted);
+    });
+
+  promoted
+    .command("set")
+    .description(
+      "Promote products in the order given, ahead of those already promoted (--only removes the others). New ones are enabled and visible to everyone unless told otherwise. Without --yes, prints the current list and the changes.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option(
+      "--product <ids>",
+      "in-app purchase or subscription ids in order, comma-separated or repeated (required)",
+      collectList,
+    )
+    .option("--enabled", "show them on the product page")
+    .option("--no-enabled", "hide them")
+    .option("--visible-for-all-users", "show them to everyone")
+    .option(
+      "--no-visible-for-all-users",
+      "show them only to people who have the app",
+    )
+    .option("--only", "remove promoted products not listed")
+    .option(...YES)
+    .action(async (appId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setPromotedInput,
+        { appId, ...options, products: options.product ?? [] },
+        setPromoted,
       );
     });
 
