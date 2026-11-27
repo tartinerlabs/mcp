@@ -505,6 +505,25 @@ Team members, sandbox testers and webhooks:
 
 Each of these writes, `webhooks ping` included, also changes nothing without `--yes`; the dry run shows the current user, invitation, tester or webhook and the change.
 
+EU alternative distribution (`alt-distribution`) is only for accounts Apple has approved for an alternative app marketplace or web distribution in the EU; for any other account, or a key without the Admin or Account Holder role, Apple refuses and the CLI returns a `[permission]` error saying so. Public keys, signed download URLs, key blobs and webhook secrets are never printed: keys, packages and key blobs go only to new files you name (readable only by you, never overwritten), and a webhook secret is read from a file.
+
+| Command | What it does |
+| --- | --- |
+| `alt-distribution keys` | Alternative distribution keys (`--app <app-id>` for one app's, `--scope app` or `account`): id and a SHA-256 fingerprint. |
+| `alt-distribution keys export <key-id> --out <file>` | Writes a key's public key to a new file. |
+| `alt-distribution package <version-id>` | The alternative distribution package of an App Store version and its versions: version, state, checksum and when the download expires. |
+| `alt-distribution package-versions <package-id>` | A package's versions (`--state COMPLETED` or `REPLACED`) with their variants and deltas. |
+| `alt-distribution download <package-version-id> --out <file>` | Downloads a package version, or with `--variant <id>` or `--delta <id>` one of its variants or deltas, through Apple's signed URL; `--key-blob-out <file>` also writes a variant's or delta's key blob. The download is held in memory before it is written. |
+| `alt-distribution marketplace <app-id>` | The app's marketplace search details: its catalog URL. |
+| `alt-distribution webhooks` | The marketplace's webhooks: id and endpoint URL. |
+| `alt-distribution keys create --public-key-file <file>` | Adds a key for the account, or with `--app <app-id>` for one app (refused if the app already has one). |
+| `alt-distribution keys delete <key-id>` | Deletes a key. |
+| `alt-distribution package request <version-id>` | Asks Apple to build the package for a version that has none. |
+| `alt-distribution marketplace set <app-id> --catalog-url <url>` and `marketplace delete <app-id>` | Sets (creating if needed) or removes the app's marketplace search details. |
+| `alt-distribution webhooks create --endpoint-url <url> --secret-file <file>`, `webhooks set <webhook-id>` and `webhooks delete <webhook-id>` | Adds, changes or deletes a marketplace webhook. |
+
+These write commands also change nothing without `--yes`.
+
 The key comes from options, or from environment variables when an option is not given. Nothing is stored: the `.p8` file is read on each run.
 
 | Option | Variable | Value |
