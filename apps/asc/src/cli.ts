@@ -26,11 +26,18 @@ import {
 } from "./commands/analytics.ts";
 import {
   appInfoInput,
+  categoriesInput,
   getAppInfo,
   setAppInfo,
   setAppInfoInput,
+  setCategories,
 } from "./commands/app-info.ts";
-import { appsInput, listApps } from "./commands/apps.ts";
+import {
+  appsInput,
+  contentRightsInput,
+  listApps,
+  setContentRights,
+} from "./commands/apps.ts";
 import {
   availabilityInput,
   getAvailability,
@@ -369,7 +376,7 @@ export function createProgram(
     return result;
   }
 
-  program
+  const apps = program
     .command("apps")
     .description(
       "Apps the key can see: id, name, bundle ID, SKU and primary locale. Use the id as <app-id> in the other commands.",
@@ -385,6 +392,37 @@ export function createProgram(
     .option(...CURSOR)
     .action(async (options, command: Command) => {
       await run(command, appsInput, options, listApps);
+    });
+
+  apps
+    .command("content-rights")
+    .description(
+      "Declare whether an app shows, accesses or includes third-party content. Without --yes, prints the current and new declaration. Needs a key with the App Manager role.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option("--uses-third-party-content", "the app uses third-party content")
+    .option("--no-third-party-content", "the app uses none")
+    .option(...YES)
+    .action(async (appId: string, options, command: Command) => {
+      if (
+        options.usesThirdPartyContent &&
+        options.thirdPartyContent === false
+      ) {
+        return command.error(
+          "[invalid_input] Give --uses-third-party-content or --no-third-party-content, not both.",
+        );
+      }
+      const declaration = options.usesThirdPartyContent
+        ? "USES_THIRD_PARTY_CONTENT"
+        : options.thirdPartyContent === false
+          ? "DOES_NOT_USE_THIRD_PARTY_CONTENT"
+          : undefined;
+      await runWrite(
+        command,
+        contentRightsInput,
+        { appId, declaration, yes: options.yes },
+        setContentRights,
+      );
     });
 
   const versions = program
@@ -678,6 +716,37 @@ export function createProgram(
         setAppInfoInput,
         { appInfoId, ...options },
         setAppInfo,
+      );
+    });
+
+  appInfo
+    .command("categories")
+    .description(
+      "Set an app info's primary and secondary categories and subcategories, checked against Apple's category list; give none to clear one. Only an app info being prepared or rejected accepts changes. Without --yes, prints the current and new categories. Needs a key with the App Manager role.",
+    )
+    .argument("<app-info-id>", "app info id from the app-info command")
+    .option("--primary <id>", "the primary category, such as GAMES")
+    .option("--primary-sub <id>", "the primary's first subcategory")
+    .option("--primary-sub-two <id>", "the primary's second subcategory")
+    .option("--secondary <id>", "the secondary category, or none")
+    .option("--secondary-sub <id>", "the secondary's first subcategory")
+    .option("--secondary-sub-two <id>", "the secondary's second subcategory")
+    .option(...YES)
+    .action(async (appInfoId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        categoriesInput,
+        {
+          appInfoId,
+          primaryCategory: options.primary,
+          primarySubcategoryOne: options.primarySub,
+          primarySubcategoryTwo: options.primarySubTwo,
+          secondaryCategory: options.secondary,
+          secondarySubcategoryOne: options.secondarySub,
+          secondarySubcategoryTwo: options.secondarySubTwo,
+          yes: options.yes,
+        },
+        setCategories,
       );
     });
 

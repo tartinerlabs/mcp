@@ -1,7 +1,11 @@
 import * as z from "zod";
 import type { AscClient, AscDocument, AscResource } from "../asc/client.ts";
 import { appIdSchema, idSchema, localeSchema } from "../schemas/common.ts";
-import { NotEditableError, NotFoundError } from "../utils/errors.ts";
+import {
+  InvalidInputError,
+  NotEditableError,
+  NotFoundError,
+} from "../utils/errors.ts";
 
 const appInfoIdSchema = idSchema("app-info");
 
@@ -190,6 +194,160 @@ export async function setAppInfo(
     action: "app-info",
     appInfoId: input.appInfoId,
     locale: input.locale,
+    changed,
+  };
+}
+
+/** A category option: an id from /v1/appCategories, or `none` to clear it. */
+const categoryIdSchema = z
+  .string()
+  .trim()
+  .regex(
+    /^[A-Z0-9_]{1,100}$/i,
+    "Must be a category id such as GAMES or GAMES_PUZZLE, or none.",
+  )
+  .transform((id) => (id.toLowerCase() === "none" ? null : id.toUpperCase()))
+  .optional();
+
+export const categoriesInput = z
+  .object({
+    appInfoId: appInfoIdSchema,
+    primaryCategory: categoryIdSchema,
+    primarySubcategoryOne: categoryIdSchema,
+    primarySubcategoryTwo: categoryIdSchema,
+    secondaryCategory: categoryIdSchema,
+    secondarySubcategoryOne: categoryIdSchema,
+    secondarySubcategoryTwo: categoryIdSchema,
+    yes: z.boolean().default(false),
+  })
+  .refine((input) => CATEGORIES.some((name) => input[name] !== undefined), {
+    message: "Give at least one category to change, such as --primary GAMES.",
+  });
+
+/** Apple's top-level categories and each one's subcategories. */
+async function readCategories(client: AscClient) {
+  const response = await client.get<AscDocument<{ platforms?: string[] }>>(
+    "/v1/appCategories",
+    {
+      "exists[parent]": "false",
+      include: "subcategories",
+      "fields[appCategories]": ["platforms", "subcategories"],
+      limit: 200,
+      "limit[subcategories]": 50,
+    },
+  );
+  return new Map(
+    response.data.map((category) => [
+      category.id,
+
+      // A to-many relationship's data is a list.
+      (
+        (category.relationships?.subcategories?.data as unknown as
+          | { id: string }[]
+          | undefined) ?? []
+      ).map(({ id }) => id),
+    ]),
+  );
+}
+
+/**
+ * Sets an app info's primary and secondary categories and subcategories.
+ * Only an app info being prepared or rejected accepts changes. Without `yes`,
+ * shows the current and new categories.
+ */
+export async function setCategories(
+  client: AscClient,
+  input: z.output<typeof categoriesInput>,
+) {
+  const { data } = await client.get<{ data: AscResource<AppInfoAttributes> }>(
+    `/v1/appInfos/${input.appInfoId}`,
+    {
+      include: CATEGORIES,
+      "fields[appInfos]": ["state", ...CATEGORIES],
+    },
+  );
+  const state = data.attributes?.state;
+  if (!EDITABLE_STATES.has(state ?? "")) {
+    throw new NotEditableError(
+      `App info ${input.appInfoId} is ${state}, so its categories can no longer be changed. Use the app info that is PREPARE_FOR_SUBMISSION or rejected; the app-info command lists them.`,
+    );
+  }
+  const current = Object.fromEntries(
+    CATEGORIES.map((name) => [
+      name,
+      data.relationships?.[name]?.data?.id ?? null,
+    ]),
+  ) as Record<(typeof CATEGORIES)[number], string | null>;
+  const next = { ...current };
+  for (const name of CATEGORIES) {
+    const given = input[name];
+    if (given !== undefined) next[name] = given;
+  }
+  const categories = await readCategories(client);
+  const valid = [...categories.keys()].sort();
+  for (const [parent, children] of [
+    ["primaryCategory", ["primarySubcategoryOne", "primarySubcategoryTwo"]],
+    [
+      "secondaryCategory",
+      ["secondarySubcategoryOne", "secondarySubcategoryTwo"],
+    ],
+  ] as const) {
+    const id = next[parent];
+    if (id !== null && !categories.has(id)) {
+      throw new InvalidInputError(
+        `${id} is not an App Store category. Categories are ${valid.join(", ")}.`,
+      );
+    }
+    for (const child of children) {
+      const sub = next[child];
+      if (sub === null) continue;
+      const subs = id === null ? [] : (categories.get(id) ?? []);
+      if (!subs.includes(sub)) {
+        throw new InvalidInputError(
+          subs.length > 0
+            ? `${sub} is not a subcategory of ${id}. Its subcategories are ${subs.join(", ")}.`
+            : `${id ?? "No category"} has no subcategories, so ${child} cannot be ${sub}.`,
+        );
+      }
+    }
+  }
+  if (next.primaryCategory === null) {
+    throw new InvalidInputError("An app needs a primary category.");
+  }
+  const changed = CATEGORIES.filter((name) => current[name] !== next[name]);
+  if (!input.yes) {
+    return {
+      dryRun: true,
+      action: "categories",
+      appInfo: { id: input.appInfoId, state },
+      current,
+      update: next,
+      changes: changed.length > 0,
+    };
+  }
+  if (changed.length > 0) {
+    await client.patch(`/v1/appInfos/${input.appInfoId}`, {
+      data: {
+        type: "appInfos",
+        id: input.appInfoId,
+        relationships: Object.fromEntries(
+          changed.map((name) => [
+            name,
+            {
+              data:
+                next[name] === null
+                  ? null
+                  : { type: "appCategories", id: next[name] },
+            },
+          ]),
+        ),
+      },
+    });
+  }
+  return {
+    dryRun: false,
+    action: "categories",
+    appInfoId: input.appInfoId,
     changed,
   };
 }

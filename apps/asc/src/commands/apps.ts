@@ -1,6 +1,11 @@
 import * as z from "zod";
-import { type AscClient, type AscDocument, pageInfo } from "../asc/client.ts";
-import { cursorSchema, limitSchema } from "../schemas/common.ts";
+import {
+  type AscClient,
+  type AscDocument,
+  type AscResource,
+  pageInfo,
+} from "../asc/client.ts";
+import { appIdSchema, cursorSchema, limitSchema } from "../schemas/common.ts";
 
 interface AppAttributes {
   name?: string;
@@ -40,5 +45,63 @@ export async function listApps(
       primaryLocale: app.attributes?.primaryLocale,
     })),
     ...pageInfo(response),
+  };
+}
+
+export const CONTENT_RIGHTS = [
+  "DOES_NOT_USE_THIRD_PARTY_CONTENT",
+  "USES_THIRD_PARTY_CONTENT",
+] as const;
+
+export const contentRightsInput = z.object({
+  appId: appIdSchema,
+  declaration: z.enum(CONTENT_RIGHTS, {
+    error: "Give --uses-third-party-content or --no-third-party-content.",
+  }),
+  yes: z.boolean().default(false),
+});
+
+/**
+ * Sets whether the app shows, accesses or includes third-party content.
+ * Without `yes`, shows the current and new declaration.
+ */
+export async function setContentRights(
+  client: AscClient,
+  input: z.output<typeof contentRightsInput>,
+) {
+  const { data } = await client.get<{
+    data: AscResource<
+      AppAttributes & { contentRightsDeclaration?: string | null }
+    >;
+  }>(`/v1/apps/${input.appId}`, {
+    "fields[apps]": ["name", "contentRightsDeclaration"],
+  });
+  const current = data.attributes?.contentRightsDeclaration ?? null;
+  const changes = current !== input.declaration;
+  if (!input.yes) {
+    return {
+      dryRun: true,
+      action: "content-rights",
+      app: { id: input.appId, name: data.attributes?.name },
+      current,
+      update: input.declaration,
+      changes,
+    };
+  }
+  if (changes) {
+    await client.patch(`/v1/apps/${input.appId}`, {
+      data: {
+        type: "apps",
+        id: input.appId,
+        attributes: { contentRightsDeclaration: input.declaration },
+      },
+    });
+  }
+  return {
+    dryRun: false,
+    action: "content-rights",
+    appId: input.appId,
+    contentRightsDeclaration: input.declaration,
+    changed: changes,
   };
 }
