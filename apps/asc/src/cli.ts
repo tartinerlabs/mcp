@@ -11,6 +11,38 @@ import {
   setAgeRatingInput,
 } from "./commands/age-rating.ts";
 import {
+  createKey,
+  createKeyInput,
+  createWebhook,
+  createWebhookInput,
+  deleteKey,
+  deleteKeyInput,
+  deleteMarketplace,
+  deleteMarketplaceInput,
+  deleteWebhook,
+  deleteWebhookInput,
+  downloadInput,
+  downloadPackage,
+  exportKey,
+  exportKeyInput,
+  getMarketplace,
+  getPackage,
+  keysInput,
+  listKeys,
+  listPackageVersions,
+  listWebhooks,
+  marketplaceInput,
+  packageInput,
+  packageVersionsInput,
+  requestPackage,
+  requestPackageInput,
+  setMarketplace,
+  setMarketplaceInput,
+  setWebhook,
+  setWebhookInput,
+  webhooksInput,
+} from "./commands/alt-distribution.ts";
+import {
   analyticsInput,
   analyticsInstancesInput,
   analyticsReportsInput,
@@ -2134,6 +2166,253 @@ export function createProgram(
     .argument("<run-id>", "run id from xcode-cloud runs")
     .action(async (runId: string, _options, command: Command) => {
       await run(command, artifactsInput, { runId }, listArtifacts);
+    });
+
+  const ELIGIBILITY =
+    "Only for accounts with Apple's EU alternative distribution entitlement; otherwise Apple refuses with a [permission] error.";
+
+  const altDistribution = program
+    .command("alt-distribution")
+    .description(
+      `EU alternative distribution: keys, the packages Apple builds for a version, and an alternative marketplace's search details and webhooks. ${ELIGIBILITY}`,
+    );
+
+  const altKeys = altDistribution
+    .command("keys")
+    .description(
+      "Alternative distribution keys: the account's, or one app's with --app. Prints ids and a fingerprint, never the public key; use keys export to write it to a file.",
+    )
+    .option("--app <app-id>", "only this app's key")
+    .addOption(
+      new Option("--scope <scope>", "only app keys or account keys").choices([
+        "app",
+        "account",
+      ]),
+    )
+    .option(...(LIMIT as [string, string, string]))
+    .action(async (options, command: Command) => {
+      await run(
+        command,
+        keysInput,
+        { appId: options.app, ...options },
+        listKeys,
+      );
+    });
+
+  altKeys
+    .command("export")
+    .description("Write a key's public key to a new file; it is never printed.")
+    .argument("<key-id>", "key id from alt-distribution keys")
+    .option("--out <path>", "new file for the public key; never overwritten")
+    .action(async (keyId: string, options, command: Command) => {
+      await run(command, exportKeyInput, { keyId, ...options }, exportKey);
+    });
+
+  altKeys
+    .command("create")
+    .description(
+      "Add an alternative distribution key from a public key file, for the account or, with --app, for one app. Without --yes, prints the key's fingerprint and the existing keys.",
+    )
+    .option(
+      "--public-key-file <path>",
+      "file holding the public key (required)",
+    )
+    .option("--app <app-id>", "add the key to this app")
+    .option(...YES)
+    .action(async (_options, command: Command) => {
+      // `keys` also has --app, so Commander gives it the value.
+      const options = command.optsWithGlobals();
+      await runWrite(
+        command,
+        createKeyInput,
+        { appId: options.app, ...options },
+        createKey,
+      );
+    });
+
+  altKeys
+    .command("delete")
+    .description(
+      "Delete an alternative distribution key. Without --yes, prints the key's id and fingerprint.",
+    )
+    .argument("<key-id>", "key id from alt-distribution keys")
+    .option(...YES)
+    .action(async (keyId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        deleteKeyInput,
+        { keyId, yes: options.yes },
+        deleteKey,
+      );
+    });
+
+  const altPackage = altDistribution
+    .command("package")
+    .description(
+      "The alternative distribution package of an App Store version and its versions: state, checksums and when their download expires. Download URLs are never printed.",
+    )
+    .argument("<version-id>", "version id from the versions command")
+    .action(async (versionId: string, _options, command: Command) => {
+      await run(command, packageInput, { versionId }, getPackage);
+    });
+
+  altPackage
+    .command("request")
+    .description(
+      "Ask Apple to build the alternative distribution package for an App Store version. Without --yes, checks the version has none yet.",
+    )
+    .argument("<version-id>", "version id from the versions command")
+    .option(...YES)
+    .action(async (versionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        requestPackageInput,
+        { versionId, yes: options.yes },
+        requestPackage,
+      );
+    });
+
+  altDistribution
+    .command("package-versions")
+    .description(
+      "A package's versions with their variants and deltas: version, state, checksum and download expiry. Download URLs and key blobs are never printed; use alt-distribution download.",
+    )
+    .argument("<package-id>", "package id from alt-distribution package")
+    .addOption(
+      new Option("--state <state>", "only this state").choices([
+        "COMPLETED",
+        "REPLACED",
+      ]),
+    )
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (packageId: string, options, command: Command) => {
+      await run(
+        command,
+        packageVersionsInput,
+        { packageId, ...options },
+        listPackageVersions,
+      );
+    });
+
+  altDistribution
+    .command("download")
+    .description(
+      "Download a package version, or one of its variants or deltas, to a new file through Apple's signed URL, which is never printed. A variant's or delta's key blob goes to --key-blob-out.",
+    )
+    .argument(
+      "<package-version-id>",
+      "package version id from alt-distribution package-versions",
+    )
+    .option("--variant <id>", "download this variant of the version")
+    .option("--delta <id>", "download this delta of the version")
+    .option("--out <path>", "new file for the package; never overwritten")
+    .option(
+      "--key-blob-out <path>",
+      "new file for the variant's or delta's key blob",
+    )
+    .action(async (packageVersionId: string, options, command: Command) => {
+      await run(
+        command,
+        downloadInput,
+        { packageVersionId, ...options },
+        downloadPackage,
+      );
+    });
+
+  const marketplace = altDistribution
+    .command("marketplace")
+    .description(
+      "An app's alternative marketplace search details: its catalog URL.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .action(async (appId: string, _options, command: Command) => {
+      await run(command, marketplaceInput, { appId }, getMarketplace);
+    });
+
+  marketplace
+    .command("set")
+    .description(
+      "Set an app's marketplace catalog URL, creating its search details if there are none. Without --yes, prints the change.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option("--catalog-url <url>", "the catalog's https:// URL (required)")
+    .option(...YES)
+    .action(async (appId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setMarketplaceInput,
+        { appId, ...options },
+        setMarketplace,
+      );
+    });
+
+  marketplace
+    .command("delete")
+    .description(
+      "Remove an app's marketplace search details. Without --yes, prints them.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option(...YES)
+    .action(async (appId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        deleteMarketplaceInput,
+        { appId, yes: options.yes },
+        deleteMarketplace,
+      );
+    });
+
+  const webhooks = altDistribution
+    .command("webhooks")
+    .description("The marketplace's webhooks: id and endpoint URL.")
+    .option(...(LIMIT as [string, string, string]))
+    .action(async (options, command: Command) => {
+      await run(command, webhooksInput, options, listWebhooks);
+    });
+
+  webhooks
+    .command("create")
+    .description(
+      "Add a marketplace webhook. The secret is read from --secret-file and never printed. Without --yes, prints the endpoint.",
+    )
+    .option("--endpoint-url <url>", "the webhook's https:// URL (required)")
+    .option("--secret-file <path>", "file holding the secret (required)")
+    .option(...YES)
+    .action(async (options, command: Command) => {
+      await runWrite(command, createWebhookInput, options, createWebhook);
+    });
+
+  webhooks
+    .command("set")
+    .description(
+      "Change a marketplace webhook's endpoint URL or secret. Without --yes, prints the change.",
+    )
+    .argument("<webhook-id>", "webhook id from alt-distribution webhooks")
+    .option("--endpoint-url <url>", "the new https:// URL")
+    .option("--secret-file <path>", "file holding the new secret")
+    .option(...YES)
+    .action(async (webhookId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setWebhookInput,
+        { webhookId, ...options },
+        setWebhook,
+      );
+    });
+
+  webhooks
+    .command("delete")
+    .description("Delete a marketplace webhook. Without --yes, prints it.")
+    .argument("<webhook-id>", "webhook id from alt-distribution webhooks")
+    .option(...YES)
+    .action(async (webhookId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        deleteWebhookInput,
+        { webhookId, yes: options.yes },
+        deleteWebhook,
+      );
     });
 
   return program;
