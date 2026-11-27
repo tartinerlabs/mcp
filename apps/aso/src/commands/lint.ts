@@ -3,14 +3,22 @@ import * as z from "zod";
 // Limits and rules from Apple's App Store search and product page guidance
 // (developer.apple.com/app-store/search, /app-store/product-page) and the
 // App Store Connect field reference. The keyword field is "100 characters"
-// on the marketing pages and "100 bytes" in App Store Connect, so the
-// stricter UTF-8 byte count is checked.
-const MAX_KEYWORD_BYTES = 100;
+// on the marketing pages and "100 bytes" in parts of App Store Connect's
+// documentation, but App Store Connect saves up to 100 characters even when
+// that is more than 100 UTF-8 bytes (Japanese, Chinese and Korean keywords
+// take two to three bytes a character). So characters are the error, and a
+// field over 100 bytes is a warning in case Apple ever counts bytes.
+const MAX_KEYWORDS = 100;
 const MAX_NAME = 30;
 const MIN_NAME = 2;
 const MAX_SUBTITLE = 30;
 // App Store Connect: each keyword is "greater than two characters".
 const MIN_KEYWORD = 3;
+// Chinese, Japanese and Korean words are often two characters (旅行, 地図),
+// and App Store Connect saves them, so those terms need two.
+const MIN_CJK_KEYWORD = 2;
+const CJK =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 // Apple names "app" as too broad and "the" and "to" as filler; "a", "an",
 // "and" and "of" are the same kind of word.
 const GENERIC_WORDS = new Set(["app", "apps"]);
@@ -101,11 +109,17 @@ export function lintKeywords(input: LintInput) {
   const terms = field.split(",");
   const cleanTerms = terms.map(normalise).filter((term) => term.length > 0);
 
-  if (bytes > MAX_KEYWORD_BYTES) {
+  if (characters > MAX_KEYWORDS) {
     issues.push({
       severity: "error",
       rule: "keywords-length",
-      message: `The keyword field is ${bytes} bytes; App Store Connect allows ${MAX_KEYWORD_BYTES}.`,
+      message: `The keyword field is ${characters} characters; App Store Connect allows ${MAX_KEYWORDS}.`,
+    });
+  } else if (bytes > MAX_KEYWORDS) {
+    issues.push({
+      severity: "warning",
+      rule: "keywords-length",
+      message: `The keyword field is ${characters} characters but ${bytes} bytes; App Store Connect accepts this, though some of Apple's documentation gives the limit as ${MAX_KEYWORDS} bytes.`,
     });
   }
   if (cleanTerms.length < terms.length) {
@@ -120,15 +134,18 @@ export function lintKeywords(input: LintInput) {
       severity: "warning",
       rule: "space-after-comma",
       message:
-        "Separate terms with commas and no spaces; each space after a comma uses a byte.",
+        "Separate terms with commas and no spaces; each space after a comma uses a character.",
     });
   }
-  const short = cleanTerms.filter((term) => [...term].length < MIN_KEYWORD);
+  const short = cleanTerms.filter(
+    (term) =>
+      [...term].length < (CJK.test(term) ? MIN_CJK_KEYWORD : MIN_KEYWORD),
+  );
   if (short.length > 0) {
     issues.push({
       severity: "error",
       rule: "short-term",
-      message: `App Store Connect needs each keyword to be at least ${MIN_KEYWORD} characters.`,
+      message: `App Store Connect needs each keyword to be at least ${MIN_KEYWORD} characters (${MIN_CJK_KEYWORD} in Chinese, Japanese or Korean).`,
       terms: short,
     });
   }
@@ -200,7 +217,8 @@ export function lintKeywords(input: LintInput) {
   return {
     bytes,
     characters,
-    remainingBytes: MAX_KEYWORD_BYTES - bytes,
+    remainingCharacters: MAX_KEYWORDS - characters,
+    remainingBytes: MAX_KEYWORDS - bytes,
     terms: cleanTerms,
     valid: issues.every((issue) => issue.severity !== "error"),
     issues,

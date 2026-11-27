@@ -133,7 +133,7 @@ describe("keywords lint", () => {
       "keywords",
       "lint",
       "--keywords",
-      `${"é".repeat(51)},go`,
+      `${"é".repeat(99)},go`,
       "--subtitle",
       "x".repeat(31),
     ]);
@@ -141,12 +141,52 @@ describe("keywords lint", () => {
     expect(result.exitCode).toBe(1);
     const output = JSON.parse(result.stdout);
     expect(output.valid).toBe(false);
-    expect(output.bytes).toBe(105);
+    expect(output.characters).toBe(102);
+    expect(output.remainingCharacters).toBe(-2);
     expect(
       output.issues
         .filter((issue: { severity: string }) => issue.severity === "error")
         .map((issue: { rule: string }) => issue.rule),
     ).toEqual(["subtitle-length", "keywords-length", "short-term"]);
+  });
+});
+
+describe("keywords lint byte count", () => {
+  it("should only warn when the field is within 100 characters but over 100 bytes", async () => {
+    const result = await run([
+      "keywords",
+      "lint",
+      "--keywords",
+      `${"é".repeat(51)},gogo`,
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    const output = JSON.parse(result.stdout);
+    expect(output.valid).toBe(true);
+    expect(output).toMatchObject({ characters: 56, bytes: 107 });
+    expect(output.issues).toContainEqual(
+      expect.objectContaining({
+        severity: "warning",
+        rule: "keywords-length",
+      }),
+    );
+  });
+});
+
+describe("keywords lint short terms", () => {
+  it("should accept two-character Chinese, Japanese and Korean terms", async () => {
+    const result = await run([
+      "keywords",
+      "lint",
+      "--keywords",
+      "旅行,地図,ログ,여행,旅",
+    ]);
+
+    const output = JSON.parse(result.stdout);
+    const short = output.issues.find(
+      (issue: { rule: string }) => issue.rule === "short-term",
+    );
+    expect(short.terms).toEqual(["旅"]);
   });
 });
 
