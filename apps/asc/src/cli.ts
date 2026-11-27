@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { Command, Option } from "commander";
+import { Argument, Command, Option } from "commander";
 import * as z from "zod";
 import pkg from "../package.json" with { type: "json" };
 import type { AscClient } from "./asc/client.ts";
@@ -85,6 +85,19 @@ import {
   uploadPageTestScreenshots,
 } from "./commands/page-tests.ts";
 import { getPricing, pricingInput } from "./commands/pricing.ts";
+import {
+  attachBuild,
+  attachBuildInput,
+  cancelReview,
+  cancelReviewInput,
+  PHASED_RELEASE_ACTIONS,
+  phasedReleaseInput,
+  releaseVersion,
+  releaseVersionInput,
+  setPhasedRelease,
+  submitVersion,
+  submitVersionInput,
+} from "./commands/release.ts";
 import {
   deleteReplyInput,
   deleteReviewReply,
@@ -278,7 +291,7 @@ export function createProgram(
       await run(command, appsInput, options, listApps);
     });
 
-  program
+  const versions = program
     .command("versions")
     .description(
       "App Store versions of an app, newest first: version string, platform, state, release type and date, and the attached build number.",
@@ -301,6 +314,94 @@ export function createProgram(
     .action(async (appId: string, options, command: Command) => {
       await run(command, versionsInput, { appId, ...options }, listVersions);
     });
+
+  versions
+    .command("attach-build")
+    .description(
+      "Attach a build to a version being prepared or rejected. Refuses a build of another app or platform, or one that is expired or not VALID. Without --yes, prints the version, its current build and the new one. Needs a key with the Admin or App Manager role.",
+    )
+    .argument("<version-id>", "version id from the versions command")
+    .argument("<build-id>", "build id from the builds command")
+    .option(...YES)
+    .action(
+      async (versionId: string, buildId: string, options, command: Command) => {
+        await runWrite(
+          command,
+          attachBuildInput,
+          { versionId, buildId, yes: options.yes },
+          attachBuild,
+        );
+      },
+    );
+
+  versions
+    .command("submit")
+    .description(
+      "Submit a version for App Review on its own. Refuses a version that is not being prepared or rejected, has no VALID build or an unanswered export compliance question, is already submitted, or has unanswered age rating or accessibility questions, and when the app has a review submission being prepared with other items. Without --yes, prints the app, version, build and the submission it would use. Needs a key with the Admin or App Manager role.",
+    )
+    .argument("<version-id>", "version id from the versions command")
+    .option(...YES)
+    .action(async (versionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        submitVersionInput,
+        { versionId, yes: options.yes },
+        submitVersion,
+      );
+    });
+
+  versions
+    .command("cancel-review")
+    .description(
+      "Cancel the review submission of a version waiting for or in review, returning the version to an editable state; it loses its place in the review queue. Refuses when the submission holds other items. Without --yes, prints the app, version and submission. Needs a key with the Admin or App Manager role.",
+    )
+    .argument("<version-id>", "version id from the versions command")
+    .option(...YES)
+    .action(async (versionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        cancelReviewInput,
+        { versionId, yes: options.yes },
+        cancelReview,
+      );
+    });
+
+  versions
+    .command("release")
+    .description(
+      "Release a version that App Review approved and that is PENDING_DEVELOPER_RELEASE; with a phased release, it starts the rollout. Without --yes, prints the app and version. Needs a key with the Admin or App Manager role.",
+    )
+    .argument("<version-id>", "version id from the versions command")
+    .option(...YES)
+    .action(async (versionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        releaseVersionInput,
+        { versionId, yes: options.yes },
+        releaseVersion,
+      );
+    });
+
+  versions
+    .command("phased-release")
+    .description(
+      "Pause, resume or complete a version's phased release; complete releases it to every user at once. Without --yes, prints the app, version and phased release. Needs a key with the Admin or App Manager role.",
+    )
+    .argument("<version-id>", "version id from the versions command")
+    .addArgument(
+      new Argument("<action>", "what to do").choices(PHASED_RELEASE_ACTIONS),
+    )
+    .option(...YES)
+    .action(
+      async (versionId: string, action: string, options, command: Command) => {
+        await runWrite(
+          command,
+          phasedReleaseInput,
+          { versionId, action, yes: options.yes },
+          setPhasedRelease,
+        );
+      },
+    );
 
   const metadata = program
     .command("metadata")

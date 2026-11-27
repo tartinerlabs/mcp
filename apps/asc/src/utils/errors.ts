@@ -46,6 +46,11 @@ export class NotEditableError extends Error {
   override name = "NotEditableError";
 }
 
+/** Thrown when App Store Connect refused a write for the key's role; its message names the role needed. */
+export class PermissionError extends Error {
+  override name = "PermissionError";
+}
+
 /** Thrown when the input names something App Store Connect would reject, such as a file of an unknown size. */
 export class InvalidInputError extends Error {
   override name = "InvalidInputError";
@@ -140,6 +145,9 @@ export function classifyError(error: unknown): ClassifiedError {
   }
   if (error instanceof NotEditableError || error instanceof InvalidInputError) {
     return { kind: "invalid_input", message: error.message };
+  }
+  if (error instanceof PermissionError) {
+    return { kind: "permission", message: error.message };
   }
   if (error instanceof WaitTimeoutError) {
     return { kind: "unavailable", message: error.message };
