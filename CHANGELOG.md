@@ -1,3 +1,9 @@
+## [0.29.0](https://github.com/tartinerlabs/mcp/compare/v0.28.0...v0.29.0) (2026-11-27)
+
+### Features
+
+* **asc:** manage certificates and profiles ([40a5636](https://github.com/tartinerlabs/mcp/commit/40a56369cff93d673f76770959e2650f6abd8102)), closes [#62](https://github.com/tartinerlabs/mcp/issues/62) [#99](https://github.com/tartinerlabs/mcp/issues/99)
+
 ## [0.28.0](https://github.com/tartinerlabs/mcp/compare/v0.27.0...v0.28.0) (2026-11-27)
 
 ### Features
