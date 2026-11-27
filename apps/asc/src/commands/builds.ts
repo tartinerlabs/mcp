@@ -1,3 +1,5 @@
+import { access, mkdir, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import * as z from "zod";
 import {
   type AscClient,
@@ -12,8 +14,15 @@ import {
   commaList,
   cursorSchema,
   limitSchema,
+  PLATFORMS,
 } from "../schemas/common.ts";
-import { AscApiError, WaitTimeoutError } from "../utils/errors.ts";
+import {
+  AscApiError,
+  InvalidInputError,
+  NotFoundError,
+  UploadIncompleteError,
+  WaitTimeoutError,
+} from "../utils/errors.ts";
 
 interface BuildAttributes {
   version?: string;
@@ -297,5 +306,326 @@ export async function expireBuild(
     action: "expire",
     buildId: input.buildId,
     changed: changes,
+  };
+}
+
+const platformSchema = z.enum(PLATFORMS).optional();
+const marketingVersionSchema = z
+  .string()
+  .trim()
+  .regex(/^\d+(\.\d+){0,2}$/, "Must be a version such as 2.5.0.")
+  .optional();
+
+/** Every page of an app's builds matching the query, newest upload first. */
+async function allBuilds(client: AscClient, query: AscQuery) {
+  const builds: Build[] = [];
+  let cursor: string | undefined;
+  do {
+    const response = await client.get<BuildsDocument>("/v1/builds", {
+      ...query,
+      limit: 200,
+      cursor,
+    });
+    builds.push(...response.data.map((build) => shapeBuild(response, build)));
+    const page = pageInfo(response);
+    cursor = page.hasMore ? page.nextCursor : undefined;
+  } while (cursor);
+  return builds;
+}
+
+export const expireBuildsInput = z
+  .object({
+    appId: appIdSchema,
+    olderThan: buildIdSchema.optional(),
+    keep: z.coerce.number().int().min(0).max(1000).optional(),
+    platform: platformSchema,
+    yes: z.boolean().default(false),
+  })
+  .refine(
+    (input) => (input.olderThan === undefined) !== (input.keep === undefined),
+    "Give --older-than <build-id> or --keep <n>, not both.",
+  );
+
+/**
+ * Expires many of an app's unexpired builds at once: every one uploaded
+ * before --older-than's build, or all but the --keep newest. This cannot be
+ * undone. Without `yes`, lists every build it would expire.
+ */
+export async function expireBuilds(
+  client: AscClient,
+  input: z.output<typeof expireBuildsInput>,
+) {
+  let cutoff: Build | undefined;
+  if (input.olderThan) {
+    const document = await client.get<BuildDocument>(
+      `/v1/builds/${input.olderThan}`,
+      {
+        ...BUILD_QUERY,
+        "fields[builds]": [...BUILD_QUERY["fields[builds]"], "app"],
+      },
+    );
+    if (document.data.relationships?.app?.data?.id !== input.appId) {
+      throw new InvalidInputError(
+        `Build ${input.olderThan} belongs to another app. Nothing was changed.`,
+      );
+    }
+    cutoff = shapeBuild(document, document.data);
+  }
+  const unexpired = await allBuilds(client, {
+    ...buildsQuery(input.appId),
+    "filter[expired]": false,
+    "filter[preReleaseVersion.platform]": input.platform,
+  });
+  const targets = cutoff
+    ? unexpired.filter(
+        (build) =>
+          build.id !== cutoff.id &&
+          build.uploadedDate !== undefined &&
+          cutoff.uploadedDate !== undefined &&
+          build.uploadedDate < cutoff.uploadedDate &&
+          (input.platform !== undefined || build.platform === cutoff.platform),
+      )
+    : unexpired.slice(input.keep);
+  if (!input.yes) {
+    return {
+      dryRun: true,
+      action: "expire-builds",
+      appId: input.appId,
+      ...(cutoff ? { olderThan: cutoff } : { keep: input.keep }),
+      count: targets.length,
+      builds: targets,
+      note: "Expiring a build cannot be undone; testers can no longer install it.",
+    };
+  }
+  const expired: string[] = [];
+  for (const build of targets) {
+    try {
+      await client.patch(`/v1/builds/${build.id}`, {
+        data: { type: "builds", id: build.id, attributes: { expired: true } },
+      });
+    } catch (error) {
+      throw new UploadIncompleteError(
+        `Stopped at build ${build.version} (${build.id}) after expiring ${expired.length} of ${targets.length} builds${expired.length > 0 ? `: ${expired.join(", ")}` : ""}.`,
+        { cause: error },
+      );
+    }
+    expired.push(build.id);
+  }
+  return {
+    dryRun: false,
+    action: "expire-builds",
+    appId: input.appId,
+    count: expired.length,
+    expired,
+  };
+}
+
+/** Compares build numbers such as 9, 10 and 1.2.10 part by part as numbers. */
+function compareBuildNumbers(a: string, b: string): number {
+  const left = a.split(".");
+  const right = b.split(".");
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const x = Number(left[i] ?? 0);
+    const y = Number(right[i] ?? 0);
+    if (Number.isNaN(x) || Number.isNaN(y)) {
+      return (left[i] ?? "").localeCompare(right[i] ?? "");
+    }
+    if (x !== y) return x - y;
+  }
+  return 0;
+}
+
+/** The build number after this one: its last part plus one, or null when that part is not a number. */
+function nextBuildNumber(buildNumber: string): string | null {
+  const parts = buildNumber.split(".");
+  const last = parts.at(-1) ?? "";
+  if (!/^\d+$/.test(last)) return null;
+  parts[parts.length - 1] = String(Number(last) + 1);
+  return parts.join(".");
+}
+
+export const latestInput = z.object({
+  appId: appIdSchema,
+  appVersion: marketingVersionSchema,
+  platform: platformSchema,
+  next: z.boolean().default(false),
+});
+
+/**
+ * The highest build number among an app's 200 most recent uploads, optionally
+ * for one marketing version and platform, with its state; `next` adds the
+ * number to upload next. Expired and failed builds count, since Apple does not
+ * take a build number twice.
+ */
+export async function latestBuild(
+  client: AscClient,
+  input: z.output<typeof latestInput>,
+) {
+  const response = await client.get<BuildsDocument>("/v1/builds", {
+    ...buildsQuery(input.appId),
+    "filter[preReleaseVersion.version]": input.appVersion,
+    "filter[preReleaseVersion.platform]": input.platform,
+    limit: 200,
+  });
+  const builds = response.data
+    .map((build) => shapeBuild(response, build))
+    .filter((build) => build.version !== undefined);
+  const latest = builds.reduce<Build | undefined>(
+    (best, build) =>
+      !best || compareBuildNumbers(build.version ?? "", best.version ?? "") > 0
+        ? build
+        : best,
+    undefined,
+  );
+  if (!latest?.version) {
+    throw new NotFoundError(
+      `The app has no builds${input.appVersion ? ` for version ${input.appVersion}` : ""}${input.platform ? ` on ${input.platform}` : ""}.`,
+    );
+  }
+  return {
+    buildNumber: latest.version,
+    ...(input.next ? { next: nextBuildNumber(latest.version) } : {}),
+    id: latest.id,
+    marketingVersion: latest.marketingVersion,
+    platform: latest.platform,
+    processingState: latest.processingState,
+    expired: latest.expired,
+    uploadedDate: latest.uploadedDate,
+  };
+}
+
+interface BuildBundleAttributes {
+  bundleId?: string;
+  bundleType?: string;
+  fileName?: string;
+  includesSymbols?: boolean;
+  dSYMUrl?: string | null;
+}
+
+export const dsymsInput = z
+  .object({
+    buildId: buildIdSchema.optional(),
+    appId: appIdSchema.optional(),
+    appVersion: marketingVersionSchema,
+    buildNumber: buildNumberSchema.optional(),
+    platform: platformSchema,
+    out: z
+      .string({ error: "Name the directory to write to with --out." })
+      .min(1),
+    overwrite: z.boolean().default(false),
+  })
+  .refine(
+    (input) =>
+      input.buildId !== undefined
+        ? input.appId === undefined && input.buildNumber === undefined
+        : input.appId !== undefined && input.buildNumber !== undefined,
+    "Give a build id, or --app with --build-number (and --app-version or --platform if needed), not both.",
+  );
+
+/** The build a dSYM download names by app, build number and optionally version and platform. */
+async function findBuildId(
+  client: AscClient,
+  input: z.output<typeof dsymsInput>,
+): Promise<string> {
+  const response = await client.get<BuildsDocument>("/v1/builds", {
+    "filter[app]": input.appId,
+    "filter[version]": input.buildNumber,
+    "filter[preReleaseVersion.version]": input.appVersion,
+    "filter[preReleaseVersion.platform]": input.platform,
+    "fields[builds]": ["version"],
+    limit: 2,
+  });
+  const [first, second] = response.data;
+  if (!first) {
+    throw new NotFoundError(
+      `The app has no build ${input.buildNumber}${input.appVersion ? ` for version ${input.appVersion}` : ""}.`,
+    );
+  }
+  if (second) {
+    throw new InvalidInputError(
+      `More than one build is numbered ${input.buildNumber}; add --app-version or --platform, or give the build id.`,
+    );
+  }
+  return first.id;
+}
+
+/** A file name from Apple's bundle id, with anything but letters, digits, dots, dashes and underscores replaced. */
+function safeName(name: string): string {
+  return name.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "_");
+}
+
+/**
+ * Downloads a build's dSYMs into a directory, one file per bundle (app, app
+ * clip, watch app) that Apple has symbols for, from the URLs Apple's response
+ * gives and without the App Store Connect token. Existing files are left
+ * alone unless `overwrite`, and are checked before anything is downloaded.
+ */
+export async function downloadDsyms(
+  client: AscClient,
+  input: z.output<typeof dsymsInput>,
+) {
+  const buildId = input.buildId ?? (await findBuildId(client, input));
+  const document = await client.get<BuildDocument>(`/v1/builds/${buildId}`, {
+    "fields[builds]": ["version", "buildBundles"],
+    include: "buildBundles",
+    "fields[buildBundles]": [
+      "bundleId",
+      "bundleType",
+      "fileName",
+      "includesSymbols",
+      "dSYMUrl",
+    ],
+    "limit[buildBundles]": 50,
+  });
+  const version = document.data.attributes?.version;
+  const bundles = (document.included ?? []).filter(
+    (resource) => resource.type === "buildBundles",
+  ) as AscResource<BuildBundleAttributes>[];
+  const withSymbols = bundles.filter((bundle) => bundle.attributes?.dSYMUrl);
+  if (withSymbols.length === 0) {
+    throw new NotFoundError(
+      `Build ${version ?? buildId} has no dSYMs in App Store Connect; Apple keeps them only for builds uploaded with symbols.`,
+    );
+  }
+  const directory = resolve(input.out);
+  const planned = withSymbols.map((bundle) => {
+    const name = safeName(
+      `${bundle.attributes?.bundleId ?? bundle.id}-${version ?? buildId}.dSYM.zip`,
+    );
+    return { bundle, name, path: join(directory, name) };
+  });
+  if (!input.overwrite) {
+    for (const file of planned) {
+      const exists = await access(file.path).then(
+        () => true,
+        () => false,
+      );
+      if (exists) {
+        throw new InvalidInputError(
+          `${file.path} already exists; give --overwrite to replace it, or another --out. Nothing was downloaded.`,
+        );
+      }
+    }
+  }
+  await mkdir(directory, { recursive: true });
+  const files = [];
+  for (const { bundle, name, path } of planned) {
+    const bytes = await client.downloadSigned(bundle.attributes?.dSYMUrl ?? "");
+    await writeFile(path, bytes, { flag: input.overwrite ? "w" : "wx" });
+    files.push({
+      bundleId: bundle.attributes?.bundleId,
+      bundleType: bundle.attributes?.bundleType,
+      file: name,
+      bytes: bytes.byteLength,
+    });
+  }
+  return {
+    buildId,
+    version,
+    directory,
+    files,
+    withoutSymbols: bundles
+      .filter((bundle) => !bundle.attributes?.dSYMUrl)
+      .map((bundle) => bundle.attributes?.bundleId ?? bundle.id),
   };
 }
