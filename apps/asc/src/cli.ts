@@ -65,6 +65,18 @@ import {
   uploadEventMedia,
 } from "./commands/events.ts";
 import {
+  getIap,
+  getSubscription,
+  IAP_TYPES,
+  iapInput,
+  iapListInput,
+  listIaps,
+  listSubscriptions,
+  PRODUCT_STATES,
+  subscriptionInput,
+  subscriptionsInput,
+} from "./commands/iap.ts";
+import {
   getMetadata,
   metadataInput,
   setMetadata,
@@ -202,7 +214,7 @@ export function createProgram(
   const program = new Command()
     .name("asc")
     .description(
-      "App Store Connect with your own API key: apps, versions and their metadata, screenshots and app previews, custom product pages, product page optimization tests, in-app events, app info, pricing, availability and age rating, builds, release status, TestFlight groups, testers, feedback and notes, and customer reviews. Commands that change anything only print what they would do unless given --yes.",
+      "App Store Connect with your own API key: apps, versions and their metadata, screenshots and app previews, custom product pages, product page optimization tests, in-app events, in-app purchases and subscriptions, app info, pricing, availability and age rating, builds, release status, TestFlight groups, testers, feedback and notes, and customer reviews. Commands that change anything only print what they would do unless given --yes.",
     )
     .version(pkg.version)
     .option("--key-id <id>", "API key ID (default: ASC_KEY_ID)")
@@ -422,6 +434,64 @@ export function createProgram(
           yes: options.yes,
         },
         setAvailability,
+      );
+    });
+
+  const iap = program
+    .command("iap")
+    .description(
+      "An app's in-app purchases: reference name, product ID, type and review state. A product missing from the app is often one never submitted for review. Read only: change products in App Store Connect.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option(
+      "--type <types>",
+      `only these types, comma-separated: ${IAP_TYPES.join(", ")}`,
+    )
+    .option(
+      "--state <states>",
+      `only these states, comma-separated, such as ${PRODUCT_STATES.slice(3, 6).join(",")}`,
+    )
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (appId: string, options, command: Command) => {
+      await run(command, iapListInput, { appId, ...options }, listIaps);
+    });
+
+  iap
+    .command("show")
+    .description(
+      "One in-app purchase: its review state, localizations, availability, base territory, the prices in effect today in each territory, and its offer codes with their counts (never the codes).",
+    )
+    .argument("<iap-id>", "in-app purchase id from the iap command")
+    .action(async (iapId: string, _options, command: Command) => {
+      await run(command, iapInput, { iapId }, getIap);
+    });
+
+  const subscriptions = program
+    .command("subscriptions")
+    .description(
+      "An app's subscription groups, each with its subscriptions' reference name, product ID, period, level and review state. Read only: change subscriptions in App Store Connect.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .action(async (appId: string, _options, command: Command) => {
+      await run(command, subscriptionsInput, { appId }, listSubscriptions);
+    });
+
+  subscriptions
+    .command("show")
+    .description(
+      "One subscription: its review state, localizations, availability, the price in effect today and scheduled changes in each territory, introductory offers that have not ended, promotional offers, offer codes with their counts (never the codes) and win-back offers that have not ended.",
+    )
+    .argument(
+      "<subscription-id>",
+      "subscription id from the subscriptions command",
+    )
+    .action(async (subscriptionId: string, _options, command: Command) => {
+      await run(
+        command,
+        subscriptionInput,
+        { subscriptionId },
+        getSubscription,
       );
     });
 
