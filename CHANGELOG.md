@@ -1,3 +1,9 @@
+## [0.31.2](https://github.com/tartinerlabs/mcp/compare/v0.31.1...v0.31.2) (2026-11-27)
+
+### Bug Fixes
+
+* **asc:** stop false blockers in versions check ([a4cc888](https://github.com/tartinerlabs/mcp/commit/a4cc88843057611df8b601bb7d4ca9c940c944ac))
+
 ## [0.31.1](https://github.com/tartinerlabs/mcp/compare/v0.31.0...v0.31.1) (2026-11-27)
 
 ### Bug Fixes
