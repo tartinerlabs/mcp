@@ -461,7 +461,7 @@ For an endpoint or field no command covers, `api <method> <path>` sends one requ
 
 Only paths such as `/v1/apps`, or URLs on `https://api.appstoreconnect.apple.com`, are accepted: a URL on any other host is refused before anything is sent, so the token never leaves Apple's API. Errors are classified like every other command's (`[permission]`, `[not_found]` and so on).
 
-Team members:
+Team members and sandbox testers:
 
 | Command | What it does |
 | --- | --- |
@@ -471,8 +471,11 @@ Team members:
 | `users remove <user-id>` | Removes a user from the team. This cannot be undone; they would need a new invitation. |
 | `users invitations` | Pending invitations with roles, visible apps and expiry; emails only with `--emails`. |
 | `users invitations cancel <invitation-id>` | Cancels a pending invitation. |
+| `sandbox testers` | Sandbox Apple Accounts for testing in-app purchases: name, storefront, renewal rate and interrupted purchases. Account emails only with `--emails`. Creating sandbox testers is not in Apple's API. |
+| `sandbox testers set <tester-id> --territory GBR --renewal-rate MONTHLY_RENEWAL_EVERY_FIVE_MINUTES` | Changes a tester's storefront, monthly subscription renewal rate or `--interrupt-purchases`. |
+| `sandbox testers clear-history <tester-id...>` | Clears testers' purchase history. This cannot be undone. |
 
-Each of these writes also changes nothing without `--yes`; the dry run shows the current user or invitation and the change.
+Each of these writes also changes nothing without `--yes`; the dry run shows the current user, invitation or tester and the change.
 
 The key comes from options, or from environment variables when an option is not given. Nothing is stored: the `.p8` file is read on each run.
 

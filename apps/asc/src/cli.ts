@@ -280,6 +280,15 @@ import {
   salesInput,
 } from "./commands/sales.ts";
 import {
+  clearHistoryInput,
+  clearSandboxHistory,
+  listSandboxTesters,
+  RENEWAL_RATES,
+  sandboxTestersInput,
+  setSandboxTester,
+  setSandboxTesterInput,
+} from "./commands/sandbox.ts";
+import {
   deleteInput,
   deleteScreenshots,
   getScreenshots,
@@ -4526,6 +4535,68 @@ export function createProgram(
         cancelInvitationInput,
         { invitationId, yes: options.yes },
         cancelInvitation,
+      );
+    });
+
+  const sandbox = program
+    .command("sandbox")
+    .description(
+      "Sandbox Apple Accounts for testing in-app purchases and subscriptions.",
+    );
+
+  const sandboxTesters = sandbox
+    .command("testers")
+    .description(
+      "The team's sandbox testers: name, storefront, subscription renewal rate and whether purchases are interrupted. Emails are left out unless --emails is given.",
+    )
+    .option("--emails", "include each tester's account email")
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (options, command: Command) => {
+      await run(command, sandboxTestersInput, options, listSandboxTesters);
+    });
+
+  sandboxTesters
+    .command("set")
+    .description(
+      "Change a sandbox tester's storefront, subscription renewal rate or interrupted purchases. Without --yes, prints the tester and the change.",
+    )
+    .argument("<tester-id>", "tester id from sandbox testers")
+    .option(
+      "--territory <code>",
+      "the storefront, a three-letter code such as USA",
+    )
+    .addOption(
+      new Option(
+        "--renewal-rate <rate>",
+        "how often a monthly subscription renews",
+      ).choices([...RENEWAL_RATES]),
+    )
+    .option("--interrupt-purchases", "interrupt purchases, to test that flow")
+    .option("--no-interrupt-purchases", "stop interrupting purchases")
+    .option(...YES)
+    .action(async (testerId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setSandboxTesterInput,
+        { testerId, ...options },
+        setSandboxTester,
+      );
+    });
+
+  sandboxTesters
+    .command("clear-history")
+    .description(
+      "Clear sandbox testers' purchase history so they can buy non-consumables and introductory offers again. This cannot be undone. Without --yes, prints the testers.",
+    )
+    .argument("<tester-ids...>", "tester ids from sandbox testers")
+    .option(...YES)
+    .action(async (testerIds: string[], options, command: Command) => {
+      await runWrite(
+        command,
+        clearHistoryInput,
+        { testerIds, yes: options.yes },
+        clearSandboxHistory,
       );
     });
 
