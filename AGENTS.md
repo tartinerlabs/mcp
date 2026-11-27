@@ -14,6 +14,8 @@ The same file registers identifiers and devices: `bundle-ids create`, `bundle-id
 
 `apps/asc` has an escape hatch in `src/commands/api.ts`: `api <method> <path>` (`apiGet` through `run`, `apiWrite` through `runWrite` for POST, PATCH and DELETE) with `--query key=value`, `--body <file|->` and, for GET, `--paginate` following `links.next`. Paths and full URLs are accepted only on `https://api.appstoreconnect.apple.com` (each `links.next` is checked too) before the `AscClient` call, which refuses other hosts as well.
 
+`apps/asc` prints shell completion with `completion <bash|zsh|fish>` (`src/commands/completion.ts`): `completionScript(program, shell)` walks the registered Commander commands, options (`argChoices` for fixed values) and arguments at runtime, so new commands need no change there. bash and zsh share generated `case` data functions; fish uses `complete -n` conditions. `tests/completion.test.ts` runs the bash script and syntax-checks zsh and fish when those shells are installed.
+
 ```sh
 pnpm check                          # root: biome lint + turbo typecheck/test — what CI runs, plus `pnpm build`
 pnpm test                           # root: turbo run test

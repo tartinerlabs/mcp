@@ -451,6 +451,14 @@ The key comes from options, or from environment variables when an option is not 
 | `--vendor-number` (`sales`, `finance`) | `ASC_VENDOR_NUMBER` | Your vendor number, for sales and finance reports. |
 | `--demo-account-password` (`testflight review-details set`) | `ASC_DEMO_ACCOUNT_PASSWORD` | The beta review demo account's password; sent to Apple, never printed. |
 
+`completion <bash|zsh|fish>` prints a shell completion script for every command, subcommand and option, and the fixed choices such as platforms and certificate types. It is generated from the installed CLI each time it runs, so after rebuilding a newer version, open a new shell to pick up new commands. Live values such as app ids are not completed. Load it from your shell's startup file (with `asc` on your `PATH`):
+
+| Shell | Add to |
+| --- | --- |
+| bash | `~/.bashrc`: `source <(asc completion bash)` |
+| zsh | `~/.zshrc`, after `compinit`: `source <(asc completion zsh)` |
+| fish | `~/.config/fish/config.fish`: `asc completion fish \| source` |
+
 The result is printed as JSON on stdout. Errors go to stderr, and a failure exits with code 1. Build it, then run it:
 
 ```sh

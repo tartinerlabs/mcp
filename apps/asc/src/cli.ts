@@ -64,6 +64,7 @@ import {
   waitForBuild,
   waitInput,
 } from "./commands/builds.ts";
+import { completionScript, SHELLS, type Shell } from "./commands/completion.ts";
 import {
   createCustomPage,
   createCustomPageInput,
@@ -3349,6 +3350,16 @@ export function createProgram(
       } else {
         await runWrite(command, apiInput, input, apiWrite);
       }
+    });
+
+  program
+    .command("completion")
+    .description(
+      "Print a shell completion script for commands, subcommands, options and their fixed choices, generated from this CLI so it never goes out of date. Load it from your shell's startup file, as the README shows.",
+    )
+    .addArgument(new Argument("<shell>", "the shell").choices([...SHELLS]))
+    .action((shell: Shell) => {
+      console.log(completionScript(program, shell));
     });
 
   return program;
