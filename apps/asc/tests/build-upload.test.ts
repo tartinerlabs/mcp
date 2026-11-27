@@ -170,6 +170,10 @@ describe("builds upload", () => {
       patch: vi.fn(async () => ({})) as AscClient["patch"],
       delete: vi.fn(async () => {}) as AscClient["delete"],
       upload: vi.fn(async () => {}) as AscClient["upload"],
+      download: vi.fn(() => Promise.reject(new Error("unexpected download"))),
+      downloadSigned: vi.fn(() =>
+        Promise.reject(new Error("unexpected download")),
+      ),
     };
     return { client, provider: vi.fn<AscClientProvider>(() => client) };
   }

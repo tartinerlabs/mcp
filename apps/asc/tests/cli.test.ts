@@ -15,14 +15,19 @@ import {
   UnexpectedResponseError,
 } from "../src/utils/errors.ts";
 
-/** Write methods for read-only tests: any call fails the test. */
-function noWrites(): Pick<AscClient, "post" | "patch" | "delete" | "upload"> {
+/** Write (and report download) methods for read-only tests: any call fails the test. */
+function noWrites(): Pick<
+  AscClient,
+  "post" | "patch" | "delete" | "upload" | "download" | "downloadSigned"
+> {
   const fail = () => Promise.reject(new Error("unexpected write"));
   return {
     post: vi.fn(fail) as AscClient["post"],
     patch: vi.fn(fail) as AscClient["patch"],
     delete: vi.fn(fail) as AscClient["delete"],
     upload: vi.fn(fail) as AscClient["upload"],
+    download: vi.fn(fail) as AscClient["download"],
+    downloadSigned: vi.fn(fail) as AscClient["downloadSigned"],
   };
 }
 
@@ -2838,6 +2843,10 @@ function screenshotsClient({
     patch: vi.fn(() => Promise.resolve({ data: {} })) as AscClient["patch"],
     delete: vi.fn(() => Promise.resolve()),
     upload: vi.fn(() => Promise.resolve()),
+    download: vi.fn(() => Promise.reject(new Error("unexpected download"))),
+    downloadSigned: vi.fn(() =>
+      Promise.reject(new Error("unexpected download")),
+    ),
   };
   return { client, provider: vi.fn<AscClientProvider>(() => client) };
 }

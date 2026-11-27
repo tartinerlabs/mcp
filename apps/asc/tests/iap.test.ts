@@ -20,6 +20,8 @@ function routed(routes: Record<string, unknown>) {
     patch: vi.fn(fail) as AscClient["patch"],
     delete: vi.fn(fail) as AscClient["delete"],
     upload: vi.fn(fail) as AscClient["upload"],
+    download: vi.fn(fail) as AscClient["download"],
+    downloadSigned: vi.fn(fail) as AscClient["downloadSigned"],
   };
   const provider = vi.fn<AscClientProvider>(() => client);
   return { client, provider };

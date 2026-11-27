@@ -244,6 +244,10 @@ function releaseClient({
     ) as AscClient["patch"],
     delete: vi.fn(() => Promise.reject(new Error("unexpected delete"))),
     upload: vi.fn(() => Promise.reject(new Error("unexpected upload"))),
+    download: vi.fn(() => Promise.reject(new Error("unexpected download"))),
+    downloadSigned: vi.fn(() =>
+      Promise.reject(new Error("unexpected download")),
+    ),
   };
   const provider = vi.fn<AscClientProvider>(() => client);
   return { client, provider };
