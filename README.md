@@ -461,6 +461,19 @@ For an endpoint or field no command covers, `api <method> <path>` sends one requ
 
 Only paths such as `/v1/apps`, or URLs on `https://api.appstoreconnect.apple.com`, are accepted: a URL on any other host is refused before anything is sent, so the token never leaves Apple's API. Errors are classified like every other command's (`[permission]`, `[not_found]` and so on).
 
+Team members:
+
+| Command | What it does |
+| --- | --- |
+| `users` | Team members by last name (`--role`, `--app`): roles, provisioning access and visible apps. Emails are left out unless `--emails` is given. The `users` commands need a team key with the Admin role. |
+| `users invite --email <email> --first-name <name> --last-name <name> --role APP_MANAGER --app <app-ids>` | Invites someone with roles and, with `--app`, only those apps (without it, all apps); `--provisioning` lets them manage signing assets. The Account Holder role cannot be given. |
+| `users set <user-id> --role DEVELOPER --app <app-ids>` | Changes a user's roles, visible apps (`--app` or `--all-apps`) or provisioning access (`--provisioning`, `--no-provisioning`); `--role` and `--app` replace the current lists. The Account Holder cannot be changed. |
+| `users remove <user-id>` | Removes a user from the team. This cannot be undone; they would need a new invitation. |
+| `users invitations` | Pending invitations with roles, visible apps and expiry; emails only with `--emails`. |
+| `users invitations cancel <invitation-id>` | Cancels a pending invitation. |
+
+Each of these writes also changes nothing without `--yes`; the dry run shows the current user or invitation and the change.
+
 The key comes from options, or from environment variables when an option is not given. Nothing is stored: the `.p8` file is read on each run.
 
 | Option | Variable | Value |

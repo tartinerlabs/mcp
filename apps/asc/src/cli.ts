@@ -368,6 +368,21 @@ import {
   submitBetaReview,
   submitBetaReviewInput,
 } from "./commands/testflight.ts";
+import {
+  cancelInvitation,
+  cancelInvitationInput,
+  invitationsInput,
+  inviteInput,
+  inviteUser,
+  listInvitations,
+  listUsers,
+  removeUser,
+  removeUserInput,
+  setUser,
+  setUserInput,
+  USER_ROLES,
+  usersInput,
+} from "./commands/users.ts";
 import { checkInput, checkVersion } from "./commands/version-check.ts";
 import {
   createVersion,
@@ -4352,6 +4367,166 @@ export function createProgram(
     .option(...YES)
     .action(async (runId: string, options, command: Command) => {
       await startAndWait(command, rerunInput, { runId, ...options }, rerunRun);
+    });
+
+  const users = program
+    .command("users")
+    .description(
+      "Team members by last name: roles, provisioning access and the apps they can see. Emails are left out unless --emails is given. The users commands need a team key with the Admin role.",
+    )
+    .option(
+      "--role <roles>",
+      `only users with these roles, comma-separated or repeated: ${USER_ROLES.join(", ")}`,
+      collectList,
+    )
+    .option(
+      "--app <app-ids>",
+      "only users who can see one of these apps, comma-separated or repeated",
+      collectList,
+    )
+    .option("--emails", "include each user's email")
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (options, command: Command) => {
+      await run(
+        command,
+        usersInput,
+        { ...options, roles: options.role, apps: options.app },
+        listUsers,
+      );
+    });
+
+  users
+    .command("invite")
+    .description(
+      "Invite someone to the team with roles and, with --app, only those apps (without it they see all apps). Without --yes, prints the invitation.",
+    )
+    .option("--email <email>", "their email address (required)")
+    .option("--first-name <name>", "their first name (required)")
+    .option("--last-name <name>", "their last name (required)")
+    .option(
+      "--role <roles>",
+      "roles, comma-separated or repeated, such as APP_MANAGER (required)",
+      collectList,
+    )
+    .option(
+      "--app <app-ids>",
+      "apps they can see, comma-separated or repeated",
+      collectList,
+    )
+    .option(
+      "--provisioning",
+      "let them manage certificates, identifiers and profiles",
+    )
+    .option(...YES)
+    .action(async (_options, command: Command) => {
+      // `users` also defines --role and --app, so Commander may hand them to the parent.
+      const options = command.optsWithGlobals();
+      await runWrite(
+        command,
+        inviteInput,
+        {
+          ...options,
+          roles: options.role ?? [],
+          apps: options.app ?? [],
+        },
+        inviteUser,
+      );
+    });
+
+  users
+    .command("set")
+    .description(
+      "Change a user's roles, visible apps or provisioning access; --role and --app replace the current lists. Without --yes, prints the user and the change.",
+    )
+    .argument("<user-id>", "user id from the users command")
+    .option(
+      "--role <roles>",
+      "the new roles, comma-separated or repeated",
+      collectList,
+    )
+    .option(
+      "--app <app-ids>",
+      "the only apps they can see, comma-separated or repeated",
+      collectList,
+    )
+    .option("--all-apps", "let them see all apps")
+    .option("--provisioning", "let them manage certificates and profiles")
+    .option("--no-provisioning", "stop them managing certificates and profiles")
+    .option(...YES)
+    .action(async (userId: string, _options, command: Command) => {
+      const options = command.optsWithGlobals();
+      await runWrite(
+        command,
+        setUserInput,
+        {
+          userId,
+          ...options,
+          roles: options.role,
+          apps: options.app ?? [],
+        },
+        setUser,
+      );
+    });
+
+  users
+    .command("remove")
+    .description(
+      "Remove a user from the team. This cannot be undone: they would need a new invitation. Without --yes, prints the user.",
+    )
+    .argument("<user-id>", "user id from the users command")
+    .option(...YES)
+    .action(async (userId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        removeUserInput,
+        { userId, yes: options.yes },
+        removeUser,
+      );
+    });
+
+  const invitations = users
+    .command("invitations")
+    .description(
+      "Pending invitations by last name: roles, visible apps and when each expires. Emails are left out unless --emails is given.",
+    )
+    .option("--role <roles>", "only invitations with these roles", collectList)
+    .option(
+      "--app <app-ids>",
+      "only invitations that can see one of these apps",
+      collectList,
+    )
+    .option("--emails", "include each invitation's email")
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (_options, command: Command) => {
+      const options = command.optsWithGlobals();
+      await run(
+        command,
+        invitationsInput,
+        {
+          ...options,
+          roles: options.role,
+          apps: options.app,
+        },
+        listInvitations,
+      );
+    });
+
+  invitations
+    .command("cancel")
+    .description(
+      "Cancel a pending invitation so its link stops working. Without --yes, prints the invitation.",
+    )
+    .argument("<invitation-id>", "invitation id from users invitations")
+    .option(...YES)
+    .action(async (invitationId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        cancelInvitationInput,
+        { invitationId, yes: options.yes },
+        cancelInvitation,
+      );
     });
 
   return program;
