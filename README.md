@@ -334,6 +334,8 @@ node apps/aso/dist/index.js competitors diff <id> <id> --snapshot competitors-us
 | `xcode-cloud runs <workflow-id>` | A workflow's build runs, newest first: progress, result, start reason, branch or tag, pull request, commit and issue counts. Apple has no branch filter, so `--branch main` filters the page that was read. |
 | `xcode-cloud run <run-id>` | One build run: its status, then each action with its issues (errors, warnings, analyzer warnings, test failures) and, for a test action with failures, its failed tests with the devices they failed on. |
 | `xcode-cloud artifacts <run-id>` | A run's artifacts per action (logs, archives, result bundles): type, file name, size and download link. Nothing is downloaded. |
+| `xcode-cloud start <workflow-id> --branch main` | Starts a workflow on a branch, tag (`--tag`) or open pull request (`--pull-request <number>`) of its repository, optionally `--clean`, and prints the new run. It uses Xcode Cloud compute hours, so without `--yes` it only prints the workflow and the reference it would build. `--wait` then polls the run (`--interval`, `--timeout`, default 60 minutes) and exits 1 unless it succeeded. |
+| `xcode-cloud rerun <run-id>` | Rebuilds an earlier run as a new run, with the same `--clean` and `--wait` options. |
 
 Each list command returns one page (up to 200, `--limit`) and reports `hasMore`; when there is more, pass the result's `nextCursor` back as `--cursor` to read the next page. A 429 from Apple is reported as `[quota]` at once, without retrying, except in `builds wait`, which backs off (1 minute, doubling up to 10) and keeps waiting. Run a command with `--help` for its filters.
 
@@ -361,6 +363,28 @@ Signing assets (certificates, provisioning profiles, bundle IDs and devices) use
 | `profiles delete <profile-id>` | Deletes a profile. This cannot be undone. |
 
 These write commands also change nothing without `--yes`. To import a new certificate into a keychain, combine the two files into a `.p12`, for example with `openssl x509 -inform der -in dist.cer -out dist.pem` and `openssl pkcs12 -export -inkey dist.key -in dist.pem -out dist.p12`.
+
+Team members, sandbox testers and webhooks:
+
+| Command | What it does |
+| --- | --- |
+| `users` | Team members by last name (`--role`, `--app`): roles, provisioning access and visible apps. Emails are left out unless `--emails` is given. The `users` commands need a team key with the Admin role. |
+| `users invite --email <email> --first-name <name> --last-name <name> --role APP_MANAGER --app <app-ids>` | Invites someone with roles and, with `--app`, only those apps (without it, all apps); `--provisioning` lets them manage signing assets. The Account Holder role cannot be given. |
+| `users set <user-id> --role DEVELOPER --app <app-ids>` | Changes a user's roles, visible apps (`--app` or `--all-apps`) or provisioning access (`--provisioning`, `--no-provisioning`); `--role` and `--app` replace the current lists. The Account Holder cannot be changed. |
+| `users remove <user-id>` | Removes a user from the team. This cannot be undone; they would need a new invitation. |
+| `users invitations` | Pending invitations with roles, visible apps and expiry; emails only with `--emails`. |
+| `users invitations cancel <invitation-id>` | Cancels a pending invitation. |
+| `sandbox testers` | Sandbox Apple Accounts for testing in-app purchases: name, storefront, renewal rate and interrupted purchases. Account emails only with `--emails`. Creating sandbox testers is not in Apple's API. |
+| `sandbox testers set <tester-id> --territory GBR --renewal-rate MONTHLY_RENEWAL_EVERY_FIVE_MINUTES` | Changes a tester's storefront, monthly subscription renewal rate or `--interrupt-purchases`. |
+| `sandbox testers clear-history <tester-id...>` | Clears testers' purchase history. This cannot be undone. |
+| `webhooks <app-id>` | An app's webhooks: name, URL, whether it is enabled and its events. |
+| `webhooks create <app-id> --name <name> --url https://… --event BUILD_UPLOAD_STATE_UPDATED --secret-env <variable>` | Creates a webhook for the given events (comma-separated or repeated). Only `https` URLs are accepted. The signing secret comes from the environment variable named by `--secret-env`, or `--secret-out <file>` generates one and writes it to that new file (mode 600); it is never printed, and the file is removed if Apple refuses the webhook. |
+| `webhooks set <webhook-id>` | Changes `--name`, `--url`, `--event` (replacing the list), `--enable` or `--disable`, or rotates the secret with `--secret-env` or `--secret-out`. |
+| `webhooks delete <webhook-id>` and `webhooks ping <webhook-id>` | Deletes a webhook, or sends it a test event. |
+| `webhooks deliveries <webhook-id>` | Its deliveries (`--state FAILED`, `--since`, `--until`): state, dates, event type, the HTTP status the URL answered with and the first 500 characters of its response. Event payloads are left out. |
+| `webhooks deliveries redeliver <delivery-id>` | Sends a delivery's event again as a new delivery. |
+
+Each of these writes, `webhooks ping` included, also changes nothing without `--yes`; the dry run shows the current user, invitation, tester or webhook and the change.
 
 The key comes from options, or from environment variables when an option is not given. Nothing is stored: the `.p8` file is read on each run.
 

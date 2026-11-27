@@ -12,7 +12,14 @@ import {
   idSchema,
   limitSchema,
 } from "../schemas/common.ts";
-import { AscApiError, PermissionError } from "../utils/errors.ts";
+import {
+  AscApiError,
+  NotFoundError,
+  PermissionError,
+  UnexpectedResponseError,
+  WaitTimeoutError,
+} from "../utils/errors.ts";
+import type { WaitDependencies } from "./builds.ts";
 
 /** Test results read per action before giving up on finding more failures. */
 const MAX_TEST_PAGES = 10;
@@ -569,4 +576,280 @@ export async function listArtifacts(
       ),
     };
   });
+}
+
+interface WorkflowDocument {
+  data: AscResource<{ name?: string; isEnabled?: boolean }>;
+  included?: AscResource[];
+}
+
+interface PullRequestDetails extends PullRequestAttributes {
+  isClosed?: boolean;
+}
+
+/** Pages of git references or pull requests read while looking for one by name or number. */
+const MAX_LOOKUP_PAGES = 10;
+
+/** Reads a collection page by page until `match` finds an item, giving up after MAX_LOOKUP_PAGES. */
+async function findInPages<Attributes>(
+  client: AscClient,
+  path: string,
+  query: Record<string, readonly string[]>,
+  match: (resource: AscResource<Attributes>) => boolean,
+) {
+  let cursor: string | undefined;
+  let pages = 0;
+  do {
+    const page = await client.get<AscDocument<Attributes>>(path, {
+      ...query,
+      limit: 200,
+      cursor,
+    });
+    const found = page.data.find(match);
+    if (found) return found;
+    cursor = pageInfo(page).nextCursor;
+    pages++;
+  } while (cursor && pages < MAX_LOOKUP_PAGES);
+  return undefined;
+}
+
+export const startInput = z
+  .object({
+    workflowId: idSchema("xcode-cloud workflows"),
+    branch: z.string().trim().min(1).max(250).optional(),
+    tag: z.string().trim().min(1).max(250).optional(),
+    pullRequest: z.coerce.number().int().min(1).optional(),
+    clean: z.boolean().default(false),
+    yes: z.boolean().default(false),
+  })
+  .refine(
+    (input) =>
+      [input.branch, input.tag, input.pullRequest].filter(
+        (value) => value !== undefined,
+      ).length === 1,
+    { message: "Give one of --branch, --tag or --pull-request." },
+  );
+
+/**
+ * Starts a workflow on a branch, tag or pull request of its repository.
+ * Without `yes`, only shows the workflow and the reference it would build.
+ */
+export async function startRun(
+  client: AscClient,
+  input: z.output<typeof startInput>,
+) {
+  return withRoleHint(async () => {
+    const workflow = await client.get<WorkflowDocument>(
+      `/v1/ciWorkflows/${input.workflowId}`,
+      {
+        include: "repository",
+        "fields[ciWorkflows]": ["name", "isEnabled", "repository"],
+        "fields[scmRepositories]": ["ownerName", "repositoryName"],
+      },
+    );
+    const repositoryId = workflow.data.relationships?.repository?.data?.id;
+    if (!repositoryId) {
+      throw new UnexpectedResponseError(
+        "App Store Connect did not return the workflow's repository.",
+      );
+    }
+    const repository = related<{ ownerName?: string; repositoryName?: string }>(
+      workflow,
+      workflow.data,
+      "repository",
+    );
+    const summary = {
+      id: workflow.data.id,
+      name: workflow.data.attributes?.name,
+      isEnabled: workflow.data.attributes?.isEnabled,
+      repository:
+        repository &&
+        [repository.ownerName, repository.repositoryName]
+          .filter(Boolean)
+          .join("/"),
+    };
+
+    let source:
+      | { type: "scmGitReferences"; id: string; name?: string; kind?: string }
+      | {
+          type: "scmPullRequests";
+          id: string;
+          number?: number;
+          title?: string;
+        };
+    if (input.pullRequest !== undefined) {
+      const number = input.pullRequest;
+      const pullRequest = await findInPages<PullRequestDetails>(
+        client,
+        `/v1/scmRepositories/${repositoryId}/pullRequests`,
+        { "fields[scmPullRequests]": ["title", "number", "isClosed"] },
+        (resource) => resource.attributes?.number === number,
+      );
+      if (!pullRequest || pullRequest.attributes?.isClosed) {
+        throw new NotFoundError(
+          `No open pull request #${number} in the workflow's repository.`,
+        );
+      }
+      source = {
+        type: "scmPullRequests",
+        id: pullRequest.id,
+        number,
+        title: pullRequest.attributes?.title,
+      };
+    } else {
+      const kind = input.tag !== undefined ? "TAG" : "BRANCH";
+      const name = input.tag ?? input.branch;
+      const reference = await findInPages<
+        GitReferenceAttributes & { isDeleted?: boolean }
+      >(
+        client,
+        `/v1/scmRepositories/${repositoryId}/gitReferences`,
+        { "fields[scmGitReferences]": ["name", "kind", "isDeleted"] },
+        (resource) =>
+          resource.attributes?.kind === kind &&
+          resource.attributes?.name === name &&
+          resource.attributes?.isDeleted !== true,
+      );
+      if (!reference) {
+        throw new NotFoundError(
+          `No ${kind === "TAG" ? "tag" : "branch"} named ${name} in the workflow's repository.`,
+        );
+      }
+      source = { type: "scmGitReferences", id: reference.id, name, kind };
+    }
+
+    if (!input.yes) {
+      return {
+        dryRun: true,
+        action: "start",
+        workflow: summary,
+        source,
+        clean: input.clean,
+        note: "Starting a build uses Xcode Cloud compute hours.",
+      };
+    }
+    const relationship =
+      source.type === "scmPullRequests" ? "pullRequest" : "sourceBranchOrTag";
+    const created = await client.post<{
+      data: AscResource<BuildRunAttributes>;
+      included?: AscResource[];
+    }>("/v1/ciBuildRuns", {
+      data: {
+        type: "ciBuildRuns",
+        ...(input.clean ? { attributes: { clean: true } } : {}),
+        relationships: {
+          workflow: { data: { type: "ciWorkflows", id: input.workflowId } },
+          [relationship]: { data: { type: source.type, id: source.id } },
+        },
+      },
+    });
+    return {
+      dryRun: false,
+      action: "start",
+      run: shapeRun(created, created.data),
+    };
+  });
+}
+
+export const rerunInput = z.object({
+  runId: idSchema("xcode-cloud runs"),
+  clean: z.boolean().default(false),
+  yes: z.boolean().default(false),
+});
+
+/** Starts a new run that rebuilds an earlier one. Without `yes`, only shows the run it would rebuild. */
+export async function rerunRun(
+  client: AscClient,
+  input: z.output<typeof rerunInput>,
+) {
+  return withRoleHint(async () => {
+    const existing = await client.get<{
+      data: AscResource<BuildRunAttributes>;
+      included?: AscResource[];
+    }>(`/v1/ciBuildRuns/${input.runId}`, RUN_QUERY);
+    if (!input.yes) {
+      return {
+        dryRun: true,
+        action: "rerun",
+        run: shapeRun(existing, existing.data),
+        clean: input.clean,
+        note: "Starting a build uses Xcode Cloud compute hours.",
+      };
+    }
+    const created = await client.post<{
+      data: AscResource<BuildRunAttributes>;
+      included?: AscResource[];
+    }>("/v1/ciBuildRuns", {
+      data: {
+        type: "ciBuildRuns",
+        ...(input.clean ? { attributes: { clean: true } } : {}),
+        relationships: {
+          buildRun: { data: { type: "ciBuildRuns", id: input.runId } },
+        },
+      },
+    });
+    return {
+      dryRun: false,
+      action: "rerun",
+      run: shapeRun(created, created.data),
+    };
+  });
+}
+
+export type BuildRun = ReturnType<typeof shapeRun>;
+
+export interface RunWaitOptions {
+  /** Minutes before giving up. */
+  timeout: number;
+  /** Seconds between checks. */
+  interval: number;
+}
+
+// After a 429, wait at least this long, doubling up to the cap, as builds wait does.
+const MIN_BACKOFF_MS = 60_000;
+const MAX_BACKOFF_MS = 600_000;
+
+/** Polls a build run until its execution progress is COMPLETE, then returns it. */
+export async function waitForRun(
+  client: AscClient,
+  runId: string,
+  { timeout, interval }: RunWaitOptions,
+  { sleep, now, progress }: WaitDependencies,
+): Promise<BuildRun> {
+  const deadline = now() + timeout * 60_000;
+  const intervalMs = interval * 1000;
+  let backoffMs = 0;
+  let lastSeen = "PENDING";
+  for (;;) {
+    let delayMs = intervalMs;
+    try {
+      const response = await withRoleHint(() =>
+        client.get<{
+          data: AscResource<BuildRunAttributes>;
+          included?: AscResource[];
+        }>(`/v1/ciBuildRuns/${runId}`, RUN_QUERY),
+      );
+      backoffMs = 0;
+      const run = shapeRun(response, response.data);
+      if (run.executionProgress === "COMPLETE") return run;
+      lastSeen = run.executionProgress ?? lastSeen;
+      progress(`Run ${run.number ?? runId}: ${lastSeen}`);
+    } catch (error) {
+      if (!(error instanceof AscApiError && error.status === 429)) throw error;
+      backoffMs = Math.min(
+        Math.max(backoffMs * 2, MIN_BACKOFF_MS),
+        MAX_BACKOFF_MS,
+      );
+      delayMs = Math.max(intervalMs, backoffMs);
+      progress(
+        `Rate limited by App Store Connect; retrying in ${Math.round(delayMs / 1000)}s`,
+      );
+    }
+    if (now() + delayMs > deadline) {
+      throw new WaitTimeoutError(
+        `Run ${runId} was still ${lastSeen} after ${timeout} minute${timeout === 1 ? "" : "s"}; check it with xcode-cloud run.`,
+      );
+    }
+    await sleep(delayMs);
+  }
 }

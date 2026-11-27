@@ -174,6 +174,15 @@ import {
   salesInput,
 } from "./commands/sales.ts";
 import {
+  clearHistoryInput,
+  clearSandboxHistory,
+  listSandboxTesters,
+  RENEWAL_RATES,
+  sandboxTestersInput,
+  setSandboxTester,
+  setSandboxTesterInput,
+} from "./commands/sandbox.ts";
+import {
   deleteInput,
   deleteScreenshots,
   getScreenshots,
@@ -205,7 +214,38 @@ import {
   submitBetaReview,
   submitBetaReviewInput,
 } from "./commands/testflight.ts";
+import {
+  cancelInvitation,
+  cancelInvitationInput,
+  invitationsInput,
+  inviteInput,
+  inviteUser,
+  listInvitations,
+  listUsers,
+  removeUser,
+  removeUserInput,
+  setUser,
+  setUserInput,
+  USER_ROLES,
+  usersInput,
+} from "./commands/users.ts";
 import { listVersions, versionsInput } from "./commands/versions.ts";
+import {
+  createWebhook,
+  createWebhookInput,
+  deleteWebhook,
+  deliveriesInput,
+  listDeliveries,
+  listWebhooks,
+  pingWebhook,
+  redeliver,
+  redeliverInput,
+  setWebhook,
+  setWebhookInput,
+  WEBHOOK_EVENTS,
+  webhookActionInput,
+  webhooksInput,
+} from "./commands/webhooks.ts";
 import {
   artifactsInput,
   getRun,
@@ -214,8 +254,13 @@ import {
   listRuns,
   listWorkflows,
   productsInput,
+  rerunInput,
+  rerunRun,
   runInput,
   runsInput,
+  startInput,
+  startRun,
+  waitForRun,
   workflowsInput,
 } from "./commands/xcode-cloud.ts";
 import { PLATFORMS } from "./schemas/common.ts";
@@ -2057,7 +2102,7 @@ export function createProgram(
   const xcodeCloud = program
     .command("xcode-cloud")
     .description(
-      "Xcode Cloud: products, workflows, build runs and, for one run, its actions, issues, failed tests and artifacts. Needs a key whose role can access Xcode Cloud.",
+      "Xcode Cloud: products, workflows, build runs and, for one run, its actions, issues, failed tests and artifacts; start or rerun a build. Needs a key whose role can access Xcode Cloud.",
     );
 
   xcodeCloud
@@ -2134,6 +2179,476 @@ export function createProgram(
     .argument("<run-id>", "run id from xcode-cloud runs")
     .action(async (runId: string, _options, command: Command) => {
       await run(command, artifactsInput, { runId }, listArtifacts);
+    });
+
+  /** Starts a run with `start` or `rerun`, then with --wait polls it and exits 1 unless it succeeded. */
+  async function startAndWait<Schema extends z.ZodType>(
+    command: Command,
+    schema: Schema,
+    input: Record<string, unknown>,
+    execute: (
+      client: AscClient,
+      input: z.output<Schema>,
+    ) => Promise<{ dryRun: boolean; run?: { id: string } }>,
+  ): Promise<void> {
+    const writeErr = stderr(command);
+    const wait = z
+      .object({
+        timeout: z.coerce.number().int().min(1).max(720),
+        interval: z.coerce.number().int().min(10).max(300),
+      })
+      .safeParse(input);
+    if (!wait.success) {
+      command.error(`[invalid_input] ${z.prettifyError(wait.error)}`);
+      return;
+    }
+    let status: string | undefined;
+    await runWrite(command, schema, input, async (client, parsed) => {
+      const result = await execute(client, parsed);
+      if (result.dryRun || !input.wait || !result.run) return result;
+      writeErr(`Started run ${result.run.id}; waiting for it to finish.\n`);
+      const finished = await waitForRun(client, result.run.id, wait.data, {
+        sleep,
+        now,
+        progress: (line) => writeErr(`${line}\n`),
+      });
+      status = finished.completionStatus ?? "unknown";
+      return { ...result, run: finished };
+    });
+    if (status && status !== "SUCCEEDED") {
+      command.error(`The run finished as ${status}.`);
+    }
+  }
+
+  /** --wait, --timeout and --interval for xcode-cloud start and rerun. */
+  function waitOptions(command: Command): Command {
+    return command
+      .option(
+        "--wait",
+        "after starting, wait until the run finishes; exits 1 unless it succeeded",
+      )
+      .option(
+        "--timeout <minutes>",
+        "with --wait, give up after this long, 1 to 720",
+        "60",
+      )
+      .option(
+        "--interval <seconds>",
+        "with --wait, time between checks, 10 to 300",
+        "30",
+      );
+  }
+
+  const start = xcodeCloud
+    .command("start")
+    .description(
+      "Start a workflow on a branch, tag or open pull request of its repository and print the new run. Without --yes, prints the workflow and the reference it would build. Uses Xcode Cloud compute hours.",
+    )
+    .argument("<workflow-id>", "workflow id from xcode-cloud workflows")
+    .option("--branch <name>", "build this branch")
+    .option("--tag <name>", "build this tag")
+    .option("--pull-request <number>", "build this open pull request")
+    .option("--clean", "start a clean build, without cached derived data");
+  waitOptions(start)
+    .option(...YES)
+    .action(async (workflowId: string, options, command: Command) => {
+      await startAndWait(
+        command,
+        startInput,
+        { workflowId, ...options },
+        startRun,
+      );
+    });
+
+  const rerun = xcodeCloud
+    .command("rerun")
+    .description(
+      "Rebuild an earlier run (same workflow and commit) and print the new run. Without --yes, prints the run it would rebuild. Uses Xcode Cloud compute hours.",
+    )
+    .argument("<run-id>", "run id from xcode-cloud runs")
+    .option("--clean", "start a clean build, without cached derived data");
+  waitOptions(rerun)
+    .option(...YES)
+    .action(async (runId: string, options, command: Command) => {
+      await startAndWait(command, rerunInput, { runId, ...options }, rerunRun);
+    });
+
+  const users = program
+    .command("users")
+    .description(
+      "Team members by last name: roles, provisioning access and the apps they can see. Emails are left out unless --emails is given. The users commands need a team key with the Admin role.",
+    )
+    .option(
+      "--role <roles>",
+      `only users with these roles, comma-separated or repeated: ${USER_ROLES.join(", ")}`,
+      collectList,
+    )
+    .option(
+      "--app <app-ids>",
+      "only users who can see one of these apps, comma-separated or repeated",
+      collectList,
+    )
+    .option("--emails", "include each user's email")
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (options, command: Command) => {
+      await run(
+        command,
+        usersInput,
+        { ...options, roles: options.role, apps: options.app },
+        listUsers,
+      );
+    });
+
+  users
+    .command("invite")
+    .description(
+      "Invite someone to the team with roles and, with --app, only those apps (without it they see all apps). Without --yes, prints the invitation.",
+    )
+    .option("--email <email>", "their email address (required)")
+    .option("--first-name <name>", "their first name (required)")
+    .option("--last-name <name>", "their last name (required)")
+    .option(
+      "--role <roles>",
+      "roles, comma-separated or repeated, such as APP_MANAGER (required)",
+      collectList,
+    )
+    .option(
+      "--app <app-ids>",
+      "apps they can see, comma-separated or repeated",
+      collectList,
+    )
+    .option(
+      "--provisioning",
+      "let them manage certificates, identifiers and profiles",
+    )
+    .option(...YES)
+    .action(async (_options, command: Command) => {
+      // `users` also defines --role and --app, so Commander may hand them to the parent.
+      const options = command.optsWithGlobals();
+      await runWrite(
+        command,
+        inviteInput,
+        {
+          ...options,
+          roles: options.role ?? [],
+          apps: options.app ?? [],
+        },
+        inviteUser,
+      );
+    });
+
+  users
+    .command("set")
+    .description(
+      "Change a user's roles, visible apps or provisioning access; --role and --app replace the current lists. Without --yes, prints the user and the change.",
+    )
+    .argument("<user-id>", "user id from the users command")
+    .option(
+      "--role <roles>",
+      "the new roles, comma-separated or repeated",
+      collectList,
+    )
+    .option(
+      "--app <app-ids>",
+      "the only apps they can see, comma-separated or repeated",
+      collectList,
+    )
+    .option("--all-apps", "let them see all apps")
+    .option("--provisioning", "let them manage certificates and profiles")
+    .option("--no-provisioning", "stop them managing certificates and profiles")
+    .option(...YES)
+    .action(async (userId: string, _options, command: Command) => {
+      const options = command.optsWithGlobals();
+      await runWrite(
+        command,
+        setUserInput,
+        {
+          userId,
+          ...options,
+          roles: options.role,
+          apps: options.app ?? [],
+        },
+        setUser,
+      );
+    });
+
+  users
+    .command("remove")
+    .description(
+      "Remove a user from the team. This cannot be undone: they would need a new invitation. Without --yes, prints the user.",
+    )
+    .argument("<user-id>", "user id from the users command")
+    .option(...YES)
+    .action(async (userId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        removeUserInput,
+        { userId, yes: options.yes },
+        removeUser,
+      );
+    });
+
+  const invitations = users
+    .command("invitations")
+    .description(
+      "Pending invitations by last name: roles, visible apps and when each expires. Emails are left out unless --emails is given.",
+    )
+    .option("--role <roles>", "only invitations with these roles", collectList)
+    .option(
+      "--app <app-ids>",
+      "only invitations that can see one of these apps",
+      collectList,
+    )
+    .option("--emails", "include each invitation's email")
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (_options, command: Command) => {
+      const options = command.optsWithGlobals();
+      await run(
+        command,
+        invitationsInput,
+        {
+          ...options,
+          roles: options.role,
+          apps: options.app,
+        },
+        listInvitations,
+      );
+    });
+
+  invitations
+    .command("cancel")
+    .description(
+      "Cancel a pending invitation so its link stops working. Without --yes, prints the invitation.",
+    )
+    .argument("<invitation-id>", "invitation id from users invitations")
+    .option(...YES)
+    .action(async (invitationId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        cancelInvitationInput,
+        { invitationId, yes: options.yes },
+        cancelInvitation,
+      );
+    });
+
+  const sandbox = program
+    .command("sandbox")
+    .description(
+      "Sandbox Apple Accounts for testing in-app purchases and subscriptions.",
+    );
+
+  const sandboxTesters = sandbox
+    .command("testers")
+    .description(
+      "The team's sandbox testers: name, storefront, subscription renewal rate and whether purchases are interrupted. Emails are left out unless --emails is given.",
+    )
+    .option("--emails", "include each tester's account email")
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (options, command: Command) => {
+      await run(command, sandboxTestersInput, options, listSandboxTesters);
+    });
+
+  sandboxTesters
+    .command("set")
+    .description(
+      "Change a sandbox tester's storefront, subscription renewal rate or interrupted purchases. Without --yes, prints the tester and the change.",
+    )
+    .argument("<tester-id>", "tester id from sandbox testers")
+    .option(
+      "--territory <code>",
+      "the storefront, a three-letter code such as USA",
+    )
+    .addOption(
+      new Option(
+        "--renewal-rate <rate>",
+        "how often a monthly subscription renews",
+      ).choices([...RENEWAL_RATES]),
+    )
+    .option("--interrupt-purchases", "interrupt purchases, to test that flow")
+    .option("--no-interrupt-purchases", "stop interrupting purchases")
+    .option(...YES)
+    .action(async (testerId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setSandboxTesterInput,
+        { testerId, ...options },
+        setSandboxTester,
+      );
+    });
+
+  sandboxTesters
+    .command("clear-history")
+    .description(
+      "Clear sandbox testers' purchase history so they can buy non-consumables and introductory offers again. This cannot be undone. Without --yes, prints the testers.",
+    )
+    .argument("<tester-ids...>", "tester ids from sandbox testers")
+    .option(...YES)
+    .action(async (testerIds: string[], options, command: Command) => {
+      await runWrite(
+        command,
+        clearHistoryInput,
+        { testerIds, yes: options.yes },
+        clearSandboxHistory,
+      );
+    });
+
+  const EVENTS_HELP = `events, comma-separated or repeated: ${WEBHOOK_EVENTS.join(", ")}`;
+  const SECRET_ENV = [
+    "--secret-env <variable>",
+    "read the signing secret from this environment variable",
+  ] as const;
+  const SECRET_OUT = [
+    "--secret-out <path>",
+    "generate a signing secret and write it to this new file (mode 600)",
+  ] as const;
+
+  const webhooks = program
+    .command("webhooks")
+    .description(
+      "An app's webhooks: name, https URL, whether it is enabled and the events it gets. Signing secrets are never printed. Needs a key with the Admin or App Manager role.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (appId: string, options, command: Command) => {
+      await run(command, webhooksInput, { appId, ...options }, listWebhooks);
+    });
+
+  webhooks
+    .command("create")
+    .description(
+      "Create a webhook that App Store Connect calls on the given events. The signing secret comes from --secret-env or is generated into --secret-out, never printed. Without --yes, prints the webhook and writes nothing.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option("--name <name>", "a name for the webhook (required)")
+    .option("--url <url>", "the https URL to call (required)")
+    .option("--event <events>", `${EVENTS_HELP} (required)`, collectList)
+    .option("--disabled", "create it disabled")
+    .option(...SECRET_ENV)
+    .option(...SECRET_OUT)
+    .option(...YES)
+    .action(async (appId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        createWebhookInput,
+        {
+          appId,
+          ...options,
+          events: options.event ?? [],
+          enabled: !options.disabled,
+        },
+        (client, input) => createWebhook(client, input),
+      );
+    });
+
+  webhooks
+    .command("set")
+    .description(
+      "Change a webhook's name, URL, events (--event replaces the list) or enabled state, or rotate its signing secret. Without --yes, prints the webhook and the change.",
+    )
+    .argument("<webhook-id>", "webhook id from the webhooks command")
+    .option("--name <name>", "a new name")
+    .option("--url <url>", "a new https URL")
+    .option("--event <events>", EVENTS_HELP, collectList)
+    .option("--enable", "enable it")
+    .option("--disable", "disable it")
+    .option(...SECRET_ENV)
+    .option(...SECRET_OUT)
+    .option(...YES)
+    .action(async (webhookId: string, options, command: Command) => {
+      if (options.enable && options.disable) {
+        command.error("[invalid_input] Give --enable or --disable, not both.");
+        return;
+      }
+      await runWrite(
+        command,
+        setWebhookInput,
+        {
+          webhookId,
+          ...options,
+          events: options.event,
+          enabled: options.enable ? true : options.disable ? false : undefined,
+        },
+        (client, input) => setWebhook(client, input),
+      );
+    });
+
+  webhooks
+    .command("delete")
+    .description(
+      "Delete a webhook; App Store Connect stops calling its URL. Without --yes, prints the webhook.",
+    )
+    .argument("<webhook-id>", "webhook id from the webhooks command")
+    .option(...YES)
+    .action(async (webhookId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        webhookActionInput,
+        { webhookId, yes: options.yes },
+        deleteWebhook,
+      );
+    });
+
+  webhooks
+    .command("ping")
+    .description(
+      "Send a test event to a webhook's URL; see the result with webhooks deliveries. Without --yes, prints the webhook.",
+    )
+    .argument("<webhook-id>", "webhook id from the webhooks command")
+    .option(...YES)
+    .action(async (webhookId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        webhookActionInput,
+        { webhookId, yes: options.yes },
+        pingWebhook,
+      );
+    });
+
+  const deliveries = webhooks
+    .command("deliveries")
+    .description(
+      "A webhook's deliveries, newest first: state, dates, event type, the HTTP status the URL answered with and the start of its response. Event payloads are left out.",
+    )
+    .argument("<webhook-id>", "webhook id from the webhooks command")
+    .addOption(
+      new Option("--state <state>", "only deliveries in this state").choices([
+        "SUCCEEDED",
+        "FAILED",
+        "PENDING",
+      ]),
+    )
+    .option("--since <date>", "only deliveries created at or after this date")
+    .option("--until <date>", "only deliveries created before this date")
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (webhookId: string, _options, command: Command) => {
+      // `webhooks` also defines --limit and --cursor, so read them with the parent's.
+      await run(
+        command,
+        deliveriesInput,
+        { webhookId, ...command.optsWithGlobals() },
+        listDeliveries,
+      );
+    });
+
+  deliveries
+    .command("redeliver")
+    .description(
+      "Send a delivery's event to its webhook again, as a new delivery. Without --yes, only names the delivery.",
+    )
+    .argument("<delivery-id>", "delivery id from webhooks deliveries")
+    .option(...YES)
+    .action(async (deliveryId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        redeliverInput,
+        { deliveryId, yes: options.yes },
+        redeliver,
+      );
     });
 
   return program;
