@@ -146,9 +146,14 @@ import {
 } from "./commands/page-tests.ts";
 import { getPricing, pricingInput } from "./commands/pricing.ts";
 import {
+  BUNDLE_ID_PLATFORMS,
+  bundleIdCapabilitiesInput,
   bundleIdsInput,
+  CAPABILITY_TYPES,
   CERTIFICATE_TYPES,
   certificatesInput,
+  createBundleId,
+  createBundleIdInput,
   createCertificate,
   createCertificateInput,
   createProfile,
@@ -156,12 +161,19 @@ import {
   deleteProfile,
   deleteProfileInput,
   devicesInput,
+  disableCapability,
+  disableCapabilityInput,
+  enableCapability,
+  enableCapabilityInput,
+  listBundleIdCapabilities,
   listBundleIds,
   listCertificates,
   listDevices,
   listProfiles,
   PROFILE_TYPES,
   profilesInput,
+  registerDevices,
+  registerDevicesInput,
   renewCertificate,
   renewCertificateInput,
   renewProfile,
@@ -2713,7 +2725,7 @@ export function createProgram(
       );
     });
 
-  program
+  const bundleIds = program
     .command("bundle-ids")
     .description(
       `Bundle IDs (App IDs) with their capabilities. Use the id as --bundle-id in profiles create. ${TEAM_KEY}`,
@@ -2732,7 +2744,104 @@ export function createProgram(
       await run(command, bundleIdsInput, options, listBundleIds);
     });
 
-  program
+  bundleIds
+    .command("create")
+    .description(
+      `Register a bundle ID. Without --yes, checks that the identifier is free. ${TEAM_KEY}`,
+    )
+    .option(
+      "--identifier <bundle-id>",
+      "reverse-DNS identifier such as com.example.app (required)",
+    )
+    .option(
+      "--name <name>",
+      "a description shown on the Developer website (required)",
+    )
+    .addOption(
+      new Option("--platform <platform>", "platform (required)").choices([
+        ...BUNDLE_ID_PLATFORMS,
+      ]),
+    )
+    .option(...YES)
+    .action(async (_options, command: Command) => {
+      // `bundle-ids` also has --identifier and --platform.
+      await runWrite(
+        command,
+        createBundleIdInput,
+        command.optsWithGlobals(),
+        createBundleId,
+      );
+    });
+
+  bundleIds
+    .command("capabilities")
+    .description(
+      `A bundle ID's enabled capabilities and their settings. ${TEAM_KEY}`,
+    )
+    .argument(
+      "<bundle-id-id>",
+      "bundle ID resource id from the bundle-ids command",
+    )
+    .action(async (bundleIdId: string, _options, command: Command) => {
+      await run(
+        command,
+        bundleIdCapabilitiesInput,
+        { bundleIdId },
+        listBundleIdCapabilities,
+      );
+    });
+
+  const CAPABILITY = new Option(
+    "--capability <type>",
+    "capability type (required)",
+  ).choices([...CAPABILITY_TYPES]);
+
+  bundleIds
+    .command("enable")
+    .description(
+      `Turn on a capability for a bundle ID, with --setting KEY=OPTION where it has settings. Existing profiles do not pick it up until renewed. Without --yes, prints the current capabilities. ${TEAM_KEY}`,
+    )
+    .argument(
+      "<bundle-id-id>",
+      "bundle ID resource id from the bundle-ids command",
+    )
+    .addOption(CAPABILITY)
+    .option(
+      "--setting <key=option>",
+      "a setting such as ICLOUD_VERSION=XCODE_6 or APPLE_ID_AUTH_APP_CONSENT=PRIMARY_APP_CONSENT; repeatable",
+      collectList,
+    )
+    .option(...YES)
+    .action(async (bundleIdId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        enableCapabilityInput,
+        { bundleIdId, ...options },
+        enableCapability,
+      );
+    });
+
+  bundleIds
+    .command("disable")
+    .description(
+      `Turn off a capability for a bundle ID. Without --yes, prints the capability. ${TEAM_KEY}`,
+    )
+    .argument(
+      "<bundle-id-id>",
+      "bundle ID resource id from the bundle-ids command",
+    )
+    .addOption(CAPABILITY)
+    .option(...YES)
+    .action(async (bundleIdId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        disableCapabilityInput,
+        { bundleIdId, ...options },
+        disableCapability,
+      );
+    });
+
+  const devices = program
     .command("devices")
     .description(
       `Registered devices: name, UDID, platform, model and status. Use the id as --device in profiles create. ${TEAM_KEY}`,
@@ -2747,6 +2856,34 @@ export function createProgram(
     .option(...CURSOR)
     .action(async (options, command: Command) => {
       await run(command, devicesInput, options, listDevices);
+    });
+
+  devices
+    .command("register")
+    .description(
+      `Register a device (--name and --udid) or every device in --file, skipping UDIDs already registered. Each counts against the yearly device limit and cannot be removed until the membership year renews. Without --yes, prints what it would register. ${TEAM_KEY}`,
+    )
+    .option("--name <name>", "the device's name")
+    .option("--udid <udid>", "the device's UDID")
+    .addOption(
+      new Option(
+        "--platform <platform>",
+        "platform, and the default for --file lines without one (default: IOS)",
+      ).choices([...BUNDLE_ID_PLATFORMS]),
+    )
+    .option(
+      "--file <path>",
+      "a file with one UDID,name[,platform] per line (comma or tab separated, platform ios or mac)",
+    )
+    .option(...YES)
+    .action(async (_options, command: Command) => {
+      // `devices` also has --name and --platform.
+      await runWrite(
+        command,
+        registerDevicesInput,
+        command.optsWithGlobals(),
+        registerDevices,
+      );
     });
 
   program
