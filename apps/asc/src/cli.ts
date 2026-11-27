@@ -4,6 +4,7 @@ import * as z from "zod";
 import pkg from "../package.json" with { type: "json" };
 import type { AscClient } from "./asc/client.ts";
 import type { CredentialOptions } from "./asc/credentials.ts";
+import { createS3Uploader, type S3Uploader } from "./asc/s3.ts";
 import {
   ageRatingInput,
   getAgeRating,
@@ -136,6 +137,15 @@ import {
   listDiagnostics,
   metricsInput,
 } from "./commands/metrics.ts";
+import {
+  getSubmission,
+  getSubmissionLog,
+  listSubmissions,
+  notarizeHistoryInput,
+  notarizeSubmissionInput,
+  notarizeSubmitInput,
+  submitNotarization,
+} from "./commands/notarize.ts";
 import {
   createPageTest,
   createPageTestInput,
@@ -364,10 +374,13 @@ function collectList(value: string, previous: string[] = []): string[] {
   ];
 }
 
-/** Clock and sleep for `builds wait`, and fetch for `metadata lint`'s URL checks; tests pass fakes. */
+/** Clock and sleep for `builds wait`, fetch for `metadata lint`'s URL checks, and the S3 upload for `notarize submit`; tests pass fakes. */
 export type ProgramOptions = Partial<
   Pick<WaitDependencies, "sleep" | "now"> & { fetch: typeof fetch }
->;
+> & {
+  notaryUpload?: S3Uploader;
+};
+
 /** The one group a --group option names; the option collects, so more than one is an error. */
 function oneGroup(command: Command, groups: string[] | undefined) {
   if (groups && groups.length > 1) {
@@ -387,6 +400,7 @@ export function createProgram(
     sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now = Date.now,
     fetch: fetchUrl = fetch,
+    notaryUpload = createS3Uploader(),
   }: ProgramOptions = {},
 ): Command {
   const program = new Command()
@@ -2409,12 +2423,12 @@ export function createProgram(
     });
 
   /** Sales and finance reports refuse individual keys, so say so before calling Apple. */
-  function requireTeamKey(command: Command, what: string): boolean {
+  function requireTeamKey(command: Command, needs: string): boolean {
     const issuerId =
       program.opts<CredentialOptions>().issuerId ?? process.env.ASC_ISSUER_ID;
     if (issuerId) return true;
     command.error(
-      `[permission] ${what} reports need a team API key, which has an issuer ID: pass --issuer-id or set ASC_ISSUER_ID. Individual keys cannot read them; an Admin creates a team key in App Store Connect → Users and Access → Integrations → Team Keys.`,
+      `[permission] ${needs} a team API key, which has an issuer ID: pass --issuer-id or set ASC_ISSUER_ID. Individual keys cannot use them; an Admin creates a team key in App Store Connect → Users and Access → Integrations → Team Keys.`,
     );
     return false;
   }
@@ -2440,7 +2454,7 @@ export function createProgram(
       "YYYY-MM-DD for daily and weekly (the Sunday the week ends), YYYY-MM for monthly, YYYY for yearly; a daily report without it is the latest",
     )
     .action(async (options, command: Command) => {
-      if (!requireTeamKey(command, "Sales")) return;
+      if (!requireTeamKey(command, "Sales reports need")) return;
       await run(command, salesInput, options, getSales);
     });
 
@@ -2458,7 +2472,7 @@ export function createProgram(
     )
     .option("--detail", "the finance detail report (region Z1) instead")
     .action(async (options, command: Command) => {
-      if (!requireTeamKey(command, "Finance")) return;
+      if (!requireTeamKey(command, "Finance reports need")) return;
       await run(command, financeInput, options, getFinance);
     });
 
@@ -3199,6 +3213,96 @@ export function createProgram(
     .argument("<run-id>", "run id from xcode-cloud runs")
     .action(async (runId: string, _options, command: Command) => {
       await run(command, artifactsInput, { runId }, listArtifacts);
+    });
+
+  const notarize = program
+    .command("notarize")
+    .description(
+      "Notarize Mac software distributed outside the Mac App Store through Apple's Notary API, with the same key. Needs a team key with the Admin or Developer role. Staple the ticket afterwards with xcrun stapler staple.",
+    );
+
+  notarize
+    .command("submit")
+    .description(
+      "Upload a .zip, .pkg or .dmg for notarization and print the submission's id and status. Without --yes, checks the file and prints its name, size and SHA-256. With --wait, waits until Apple finishes and exits 1 unless the status is Accepted; progress goes to stderr.",
+    )
+    .argument("<file>", "the .zip, .pkg or .dmg to notarize")
+    .option("--wait", "after uploading, wait until notarization finishes")
+    .option("--timeout <minutes>", "with --wait, give up after this long", "30")
+    .option(
+      "--interval <seconds>",
+      "with --wait, time between checks, 10 to 300",
+      "30",
+    )
+    .option(...YES)
+    .action(async (file: string, options, command: Command) => {
+      if (!requireTeamKey(command, "Notarization needs")) return;
+      const writeErr = stderr(command);
+      let status: string | undefined;
+      await runWrite(
+        command,
+        notarizeSubmitInput,
+        { file, ...options },
+        async (client, input) => {
+          const result = await submitNotarization(client, input, {
+            upload: notaryUpload,
+            sleep,
+            now,
+            progress: (line) => writeErr(`${line}\n`),
+          });
+          if ("submission" in result && input.wait) {
+            status = result.submission.status;
+          }
+          return result;
+        },
+      );
+      if (status !== undefined && status !== "Accepted") {
+        command.error(
+          `Notarization finished as ${status}; run notarize log with the submission id for Apple's issues.`,
+        );
+      }
+    });
+
+  notarize
+    .command("status")
+    .description(
+      "One submission's status (In Progress, Accepted, Invalid or Rejected), name and date.",
+    )
+    .argument("<submission-id>", "id from notarize submit or notarize history")
+    .action(async (submissionId: string, _options, command: Command) => {
+      if (!requireTeamKey(command, "Notarization needs")) return;
+      await run(
+        command,
+        notarizeSubmissionInput,
+        { submissionId },
+        getSubmission,
+      );
+    });
+
+  notarize
+    .command("log")
+    .description(
+      "A finished submission's log from Apple: the outcome and every issue (severity, path, message, architecture). Read it even when notarization succeeds, for warnings.",
+    )
+    .argument("<submission-id>", "id from notarize submit or notarize history")
+    .action(async (submissionId: string, _options, command: Command) => {
+      if (!requireTeamKey(command, "Notarization needs")) return;
+      await run(
+        command,
+        notarizeSubmissionInput,
+        { submissionId },
+        getSubmissionLog,
+      );
+    });
+
+  notarize
+    .command("history")
+    .description(
+      "The team's 100 most recent notarization submissions: id, name, status and date.",
+    )
+    .action(async (options, command: Command) => {
+      if (!requireTeamKey(command, "Notarization needs")) return;
+      await run(command, notarizeHistoryInput, options, listSubmissions);
     });
 
   return program;

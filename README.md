@@ -421,6 +421,17 @@ asc signing uninstall --keychain "$RUNNER_TEMP/ci.keychain-db" --yes
 
 These write commands also change nothing without `--yes`. `signing install` imports the `.cer` and key files from `certificates create` as they are.
 
+Mac software distributed outside the Mac App Store is notarized through Apple's Notary API, which takes the same key, so it runs anywhere the key is, including Linux CI, with no Xcode. It needs a team key with the Admin or Developer role: an individual key gets a `[permission]` error saying so.
+
+| Command | What it does |
+| --- | --- |
+| `notarize submit <file>` | Submits a `.zip`, `.pkg` or `.dmg` for notarization: it names the file and its SHA-256 to Apple, uploads the file to the Amazon S3 location Apple's response gives with the temporary credentials it carries (in parts, read from disk one at a time), and prints the submission's id and status. Without `--yes` it only prints the file's name, size and SHA-256. `--wait` then checks every 30 seconds (`--interval`) for up to 30 minutes (`--timeout`) and exits 1 unless the result is `Accepted`. |
+| `notarize status <submission-id>` | One submission's status (`In Progress`, `Accepted`, `Invalid` or `Rejected`), name and date. |
+| `notarize log <submission-id>` | Apple's log for a finished submission: the outcome and every issue with its severity, path, message and architecture. Read it even when notarization succeeds, for warnings. |
+| `notarize history` | The team's 100 most recent submissions. |
+
+Stapling the ticket to the file stays a local step on a Mac once notarization is `Accepted`, so the app opens without a network check: `xcrun stapler staple MyApp.dmg` (or the `.pkg`, or the `.app` inside a `.zip`, which you then zip again).
+
 The key comes from options, or from environment variables when an option is not given. Nothing is stored: the `.p8` file is read on each run.
 
 | Option | Variable | Value |
