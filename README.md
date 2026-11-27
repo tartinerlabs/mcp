@@ -313,6 +313,23 @@ Commands that change anything (`metadata set`, `app-info set`, `availability set
 
 Setting `ITSAppUsesNonExemptEncryption` in the app's `Info.plist` answers the export compliance question for every build uploaded after it, so most apps only need `builds compliance` for builds already uploaded without it.
 
+Signing assets (certificates, provisioning profiles, bundle IDs and devices) use Apple's Provisioning endpoints, which need a team key: an individual key gets a `[permission]` error saying so.
+
+| Command | What it does |
+| --- | --- |
+| `certificates` | Signing certificates: type (`--type DISTRIBUTION,IOS_DISTRIBUTION`), platform, serial number and expiry. |
+| `profiles` | Provisioning profiles (`--type`, `--state ACTIVE` or `INVALID`, `--name`): type, state, expiry, bundle ID, and up to 50 of their certificates and devices, with the device count. The profile contents are never printed. |
+| `bundle-ids` | Bundle IDs (`--identifier`, `--platform`) with their capabilities. |
+| `devices` | Registered devices (`--platform`, `--status ENABLED` or `DISABLED`, `--name`): name, UDID, model and status. |
+| `certificates create --type DISTRIBUTION --key-out <file> --cert-out <file>` | Makes a new RSA 2048 private key and a certificate signing request for it, and asks Apple for the certificate. The key goes to `--key-out` (PKCS#8 PEM, readable only by you) and the certificate to `--cert-out` (DER, like the `.cer` Apple's website gives). Neither file may exist already, and neither is printed. If Apple refuses, the key file is removed. The dry run lists the certificates of that type you already have, since Apple limits how many there can be. |
+| `certificates renew <certificate-id> --key-out <file> --cert-out <file>` | Creates a new certificate of the same type as an expiring one, as `certificates create` does. The old one keeps working until it expires or is revoked. |
+| `certificates revoke <certificate-id>` | Revokes a certificate. This cannot be undone and makes every profile that includes it invalid; the dry run lists those profiles. |
+| `profiles create --name <name> --type IOS_APP_STORE --bundle-id <id> --certificate <ids> --out <file>` | Creates a profile for a bundle ID (the id from `bundle-ids`) and certificates and writes it to `--out`. Development and ad hoc profiles also need `--device <ids>` from `devices`. |
+| `profiles renew <profile-id> --out <file>` | Replaces an invalid or expiring profile: deletes it, then creates one with the same name, type, bundle ID, certificates and devices, or the ones given with `--certificate` and `--device` (for example after `certificates renew`). Apple has no call to regenerate a profile and is taken to refuse a second profile with the same name (unverified), so if creating the new one fails, the error says the old one is already deleted. |
+| `profiles delete <profile-id>` | Deletes a profile. This cannot be undone. |
+
+These write commands also change nothing without `--yes`. To import a new certificate into a keychain, combine the two files into a `.p12`, for example with `openssl x509 -inform der -in dist.cer -out dist.pem` and `openssl pkcs12 -export -inkey dist.key -in dist.pem -out dist.p12`.
+
 The key comes from options, or from environment variables when an option is not given. Nothing is stored: the `.p8` file is read on each run.
 
 | Option | Variable | Value |

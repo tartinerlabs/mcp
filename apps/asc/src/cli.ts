@@ -86,6 +86,30 @@ import {
 } from "./commands/page-tests.ts";
 import { getPricing, pricingInput } from "./commands/pricing.ts";
 import {
+  bundleIdsInput,
+  CERTIFICATE_TYPES,
+  certificatesInput,
+  createCertificate,
+  createCertificateInput,
+  createProfile,
+  createProfileInput,
+  deleteProfile,
+  deleteProfileInput,
+  devicesInput,
+  listBundleIds,
+  listCertificates,
+  listDevices,
+  listProfiles,
+  PROFILE_TYPES,
+  profilesInput,
+  renewCertificate,
+  renewCertificateInput,
+  renewProfile,
+  renewProfileInput,
+  revokeCertificate,
+  revokeCertificateInput,
+} from "./commands/provisioning.ts";
+import {
   deleteReplyInput,
   deleteReviewReply,
   replyInput,
@@ -1258,6 +1282,244 @@ export function createProgram(
     )
     .action(async (appId: string, options, command: Command) => {
       await run(command, statusInput, { appId, ...options }, getStatus);
+    });
+
+  const TEAM_KEY =
+    "Needs a team key: individual keys cannot use certificates, profiles, bundle IDs or devices.";
+  const KEY_OUT = [
+    "--key-out <path>",
+    "new file for the private key (PKCS#8 PEM, readable only by you); never overwritten (required)",
+  ] as const;
+  const CERT_OUT = [
+    "--cert-out <path>",
+    "new file for the certificate (DER .cer); never overwritten (required)",
+  ] as const;
+  const COMMON_NAME = [
+    "--common-name <name>",
+    "the CSR's common name; Apple names the certificate itself",
+  ] as const;
+
+  const certificates = program
+    .command("certificates")
+    .description(
+      `Signing certificates: type, platform, serial number and expiry. ${TEAM_KEY}`,
+    )
+    .option(
+      "--type <types>",
+      "only these certificate types, comma-separated, such as DISTRIBUTION,IOS_DISTRIBUTION",
+    )
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (options, command: Command) => {
+      await run(command, certificatesInput, options, listCertificates);
+    });
+
+  certificates
+    .command("create")
+    .description(
+      `Create a certificate from a new RSA 2048 private key, writing the key and the certificate to the files you name. The key is never printed. Without --yes, checks the files and lists the existing certificates of that type. ${TEAM_KEY}`,
+    )
+    .addOption(
+      new Option("--type <type>", "certificate type (required)").choices([
+        ...CERTIFICATE_TYPES,
+      ]),
+    )
+    .option(...KEY_OUT)
+    .option(...CERT_OUT)
+    .option(...COMMON_NAME)
+    .option(...YES)
+    .action(async (_options, command: Command) => {
+      // `certificates` also has --type, so Commander gives it the value.
+      await runWrite(
+        command,
+        createCertificateInput,
+        command.optsWithGlobals(),
+        createCertificate,
+      );
+    });
+
+  certificates
+    .command("renew")
+    .description(
+      `Create a replacement for an expiring certificate: a new certificate of the same type from a new private key. The old one keeps working until it expires or is revoked. Without --yes, prints the certificate it replaces. ${TEAM_KEY}`,
+    )
+    .argument(
+      "<certificate-id>",
+      "certificate id from the certificates command",
+    )
+    .option(...KEY_OUT)
+    .option(...CERT_OUT)
+    .option(...COMMON_NAME)
+    .option(...YES)
+    .action(async (certificateId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        renewCertificateInput,
+        { certificateId, ...options },
+        renewCertificate,
+      );
+    });
+
+  certificates
+    .command("revoke")
+    .description(
+      `Revoke a certificate. This cannot be undone and makes every profile that includes it invalid; without --yes, prints the certificate and those profiles. ${TEAM_KEY}`,
+    )
+    .argument(
+      "<certificate-id>",
+      "certificate id from the certificates command",
+    )
+    .option(...YES)
+    .action(async (certificateId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        revokeCertificateInput,
+        { certificateId, yes: options.yes },
+        revokeCertificate,
+      );
+    });
+
+  const profiles = program
+    .command("profiles")
+    .description(
+      `Provisioning profiles: type, state, expiry, bundle ID, certificates and devices (up to 50 of each shown). Never prints the profile contents. ${TEAM_KEY}`,
+    )
+    .option(
+      "--type <types>",
+      "only these profile types, comma-separated, such as IOS_APP_STORE",
+    )
+    .option("--state <states>", "only ACTIVE or INVALID profiles")
+    .option("--name <name>", "only the profile with this name")
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (options, command: Command) => {
+      await run(command, profilesInput, options, listProfiles);
+    });
+
+  profiles
+    .command("create")
+    .description(
+      `Create a provisioning profile for a bundle ID and certificates (and, for development and ad hoc profiles, devices) and write it to --out. Without --yes, prints what it would create. ${TEAM_KEY}`,
+    )
+    .option(
+      "--name <name>",
+      "the profile's name, unique in the team (required)",
+    )
+    .addOption(
+      new Option("--type <type>", "profile type (required)").choices([
+        ...PROFILE_TYPES,
+      ]),
+    )
+    .option(
+      "--bundle-id <id>",
+      "bundle ID resource id from the bundle-ids command (required)",
+    )
+    .option(
+      "--certificate <ids>",
+      "certificate ids from the certificates command; repeat or comma-separate (required)",
+      collectList,
+    )
+    .option(
+      "--device <ids>",
+      "device ids from the devices command, for development and ad hoc profiles; repeat or comma-separate",
+      collectList,
+    )
+    .option(
+      "--out <path>",
+      "new file for the profile; never overwritten (required)",
+    )
+    .option(...YES)
+    .action(async (_options, command: Command) => {
+      // `profiles` also has --type and --name, so Commander gives it those values.
+      const options = command.optsWithGlobals();
+      await runWrite(
+        command,
+        createProfileInput,
+        { ...options, certificate: options.certificate ?? [] },
+        createProfile,
+      );
+    });
+
+  profiles
+    .command("renew")
+    .description(
+      `Replace an invalid or expiring profile: deletes it and creates one with the same name, type, bundle ID, certificates and devices (or the ones you give), written to --out. Without --yes, prints the profile it replaces and what it would create. ${TEAM_KEY}`,
+    )
+    .argument("<profile-id>", "profile id from the profiles command")
+    .option(
+      "--certificate <ids>",
+      "use these certificates instead; repeat or comma-separate",
+      collectList,
+    )
+    .option(
+      "--device <ids>",
+      "use these devices instead; repeat or comma-separate",
+      collectList,
+    )
+    .option(
+      "--out <path>",
+      "new file for the profile; never overwritten (required)",
+    )
+    .option(...YES)
+    .action(async (profileId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        renewProfileInput,
+        { profileId, ...options },
+        renewProfile,
+      );
+    });
+
+  profiles
+    .command("delete")
+    .description(
+      `Delete a provisioning profile. This cannot be undone; without --yes, prints the profile. ${TEAM_KEY}`,
+    )
+    .argument("<profile-id>", "profile id from the profiles command")
+    .option(...YES)
+    .action(async (profileId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        deleteProfileInput,
+        { profileId, yes: options.yes },
+        deleteProfile,
+      );
+    });
+
+  program
+    .command("bundle-ids")
+    .description(
+      `Bundle IDs (App IDs) with their capabilities. Use the id as --bundle-id in profiles create. ${TEAM_KEY}`,
+    )
+    .option(
+      "--identifier <bundle-id>",
+      "only this identifier, such as com.example.app",
+    )
+    .option(
+      "--platform <platforms>",
+      "only these platforms, such as IOS,MAC_OS",
+    )
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (options, command: Command) => {
+      await run(command, bundleIdsInput, options, listBundleIds);
+    });
+
+  program
+    .command("devices")
+    .description(
+      `Registered devices: name, UDID, platform, model and status. Use the id as --device in profiles create. ${TEAM_KEY}`,
+    )
+    .option(
+      "--platform <platforms>",
+      "only these platforms, such as IOS,MAC_OS",
+    )
+    .option("--status <statuses>", "only ENABLED or DISABLED devices")
+    .option("--name <name>", "only devices with this name")
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (options, command: Command) => {
+      await run(command, devicesInput, options, listDevices);
     });
 
   return program;
