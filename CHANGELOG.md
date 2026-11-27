@@ -1,3 +1,13 @@
+## [0.30.0](https://github.com/tartinerlabs/mcp/compare/v0.29.0...v0.30.0) (2026-11-27)
+
+### Features
+
+* **asc:** summarise sales, finance and analytics ([95c0f00](https://github.com/tartinerlabs/mcp/commit/95c0f0046f038e6b345b538cc5ffd0a206f1f1f5)), closes [#34](https://github.com/tartinerlabs/mcp/issues/34) [#35](https://github.com/tartinerlabs/mcp/issues/35)
+
+### Bug Fixes
+
+* **asc:** keep one PermissionError after merging main ([55ba51a](https://github.com/tartinerlabs/mcp/commit/55ba51a2e3d5e91da93a19598f985caf609a2ae9))
+
 ## [0.29.0](https://github.com/tartinerlabs/mcp/compare/v0.28.0...v0.29.0) (2026-11-27)
 
 ### Features
