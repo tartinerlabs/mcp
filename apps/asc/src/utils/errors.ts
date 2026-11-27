@@ -56,6 +56,11 @@ export class UploadIncompleteError extends Error {
   override name = "UploadIncompleteError";
 }
 
+/** Thrown when App Store Connect refuses a request and the command knows which role it needs; its message names the role. */
+export class PermissionError extends Error {
+  override name = "PermissionError";
+}
+
 /** Thrown when `builds wait` gives up before the build finishes processing. */
 export class WaitTimeoutError extends Error {
   override name = "WaitTimeoutError";
@@ -160,6 +165,9 @@ export function classifyError(error: unknown): ClassifiedError {
       status: 403,
       message: `${error.message}${appleDetail(error.detail)}`,
     };
+  }
+  if (error instanceof PermissionError) {
+    return { kind: "permission", message: error.message };
   }
   if (error instanceof WaitTimeoutError) {
     return { kind: "unavailable", message: error.message };

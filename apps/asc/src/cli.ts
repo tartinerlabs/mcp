@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { Command, Option } from "commander";
+import { Argument, Command, Option } from "commander";
 import * as z from "zod";
 import pkg from "../package.json" with { type: "json" };
 import type { AscClient } from "./asc/client.ts";
@@ -23,9 +23,12 @@ import {
   setAvailability,
   setAvailabilityInput,
 } from "./commands/availability.ts";
+import { buildUploadInput, uploadBuild } from "./commands/build-upload.ts";
 import {
   buildsInput,
   complianceInput,
+  expireBuild,
+  expireInput,
   listBuilds,
   setBuildCompliance,
   type WaitDependencies,
@@ -65,11 +68,32 @@ import {
   uploadEventMedia,
 } from "./commands/events.ts";
 import {
+  getIap,
+  getSubscription,
+  IAP_TYPES,
+  iapInput,
+  iapListInput,
+  listIaps,
+  listSubscriptions,
+  PRODUCT_STATES,
+  subscriptionInput,
+  subscriptionsInput,
+} from "./commands/iap.ts";
+import {
   getMetadata,
   metadataInput,
   setMetadata,
   setMetadataInput,
 } from "./commands/metadata.ts";
+import {
+  DIAGNOSTIC_TYPES,
+  diagnosticLogsInput,
+  diagnosticsInput,
+  getDiagnosticLogs,
+  getMetrics,
+  listDiagnostics,
+  metricsInput,
+} from "./commands/metrics.ts";
 import {
   createPageTest,
   createPageTestInput,
@@ -110,6 +134,19 @@ import {
   revokeCertificateInput,
 } from "./commands/provisioning.ts";
 import {
+  attachBuild,
+  attachBuildInput,
+  cancelReview,
+  cancelReviewInput,
+  PHASED_RELEASE_ACTIONS,
+  phasedReleaseInput,
+  releaseVersion,
+  releaseVersionInput,
+  setPhasedRelease,
+  submitVersion,
+  submitVersionInput,
+} from "./commands/release.ts";
+import {
   deleteReplyInput,
   deleteReviewReply,
   replyInput,
@@ -134,8 +171,10 @@ import {
   addTestersInput,
   betaFeedbackInput,
   betaGroupsInput,
+  betaReviewInput,
   betaTestersInput,
   FEEDBACK_TYPES,
+  getBetaReview,
   listBetaFeedback,
   listBetaGroups,
   listBetaTesters,
@@ -143,8 +182,22 @@ import {
   removeTesters,
   removeTestersInput,
   setBuildNotes,
+  submitBetaReview,
+  submitBetaReviewInput,
 } from "./commands/testflight.ts";
 import { listVersions, versionsInput } from "./commands/versions.ts";
+import {
+  artifactsInput,
+  getRun,
+  listArtifacts,
+  listProducts,
+  listRuns,
+  listWorkflows,
+  productsInput,
+  runInput,
+  runsInput,
+  workflowsInput,
+} from "./commands/xcode-cloud.ts";
 import { PLATFORMS } from "./schemas/common.ts";
 import { classifyError } from "./utils/errors.ts";
 
@@ -226,7 +279,7 @@ export function createProgram(
   const program = new Command()
     .name("asc")
     .description(
-      "App Store Connect with your own API key: apps, versions and their metadata, screenshots and app previews, custom product pages, product page optimization tests, in-app events, app info, pricing, availability and age rating, builds, release status, TestFlight groups, testers, feedback and notes, and customer reviews. Commands that change anything only print what they would do unless given --yes.",
+      "App Store Connect with your own API key: apps, versions and their metadata, screenshots and app previews, custom product pages, product page optimization tests, in-app events, in-app purchases and subscriptions, app info, pricing, availability and age rating, builds, release status, TestFlight groups, testers, feedback and notes, and customer reviews. Commands that change anything only print what they would do unless given --yes.",
     )
     .version(pkg.version)
     .option("--key-id <id>", "API key ID (default: ASC_KEY_ID)")
@@ -302,7 +355,7 @@ export function createProgram(
       await run(command, appsInput, options, listApps);
     });
 
-  program
+  const versions = program
     .command("versions")
     .description(
       "App Store versions of an app, newest first: version string, platform, state, release type and date, and the attached build number.",
@@ -325,6 +378,94 @@ export function createProgram(
     .action(async (appId: string, options, command: Command) => {
       await run(command, versionsInput, { appId, ...options }, listVersions);
     });
+
+  versions
+    .command("attach-build")
+    .description(
+      "Attach a build to a version being prepared or rejected. Refuses a build of another app or platform, or one that is expired or not VALID. Without --yes, prints the version, its current build and the new one. Needs a key with the Admin or App Manager role.",
+    )
+    .argument("<version-id>", "version id from the versions command")
+    .argument("<build-id>", "build id from the builds command")
+    .option(...YES)
+    .action(
+      async (versionId: string, buildId: string, options, command: Command) => {
+        await runWrite(
+          command,
+          attachBuildInput,
+          { versionId, buildId, yes: options.yes },
+          attachBuild,
+        );
+      },
+    );
+
+  versions
+    .command("submit")
+    .description(
+      "Submit a version for App Review on its own. Refuses a version that is not being prepared or rejected, has no VALID build or an unanswered export compliance question, is already submitted, or has unanswered age rating or accessibility questions, and when the app has a review submission being prepared with other items. Without --yes, prints the app, version, build and the submission it would use. Needs a key with the Admin or App Manager role.",
+    )
+    .argument("<version-id>", "version id from the versions command")
+    .option(...YES)
+    .action(async (versionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        submitVersionInput,
+        { versionId, yes: options.yes },
+        submitVersion,
+      );
+    });
+
+  versions
+    .command("cancel-review")
+    .description(
+      "Cancel the review submission of a version waiting for or in review, returning the version to an editable state; it loses its place in the review queue. Refuses when the submission holds other items. Without --yes, prints the app, version and submission. Needs a key with the Admin or App Manager role.",
+    )
+    .argument("<version-id>", "version id from the versions command")
+    .option(...YES)
+    .action(async (versionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        cancelReviewInput,
+        { versionId, yes: options.yes },
+        cancelReview,
+      );
+    });
+
+  versions
+    .command("release")
+    .description(
+      "Release a version that App Review approved and that is PENDING_DEVELOPER_RELEASE; with a phased release, it starts the rollout. Without --yes, prints the app and version. Needs a key with the Admin or App Manager role.",
+    )
+    .argument("<version-id>", "version id from the versions command")
+    .option(...YES)
+    .action(async (versionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        releaseVersionInput,
+        { versionId, yes: options.yes },
+        releaseVersion,
+      );
+    });
+
+  versions
+    .command("phased-release")
+    .description(
+      "Pause, resume or complete a version's phased release; complete releases it to every user at once. Without --yes, prints the app, version and phased release. Needs a key with the Admin or App Manager role.",
+    )
+    .argument("<version-id>", "version id from the versions command")
+    .addArgument(
+      new Argument("<action>", "what to do").choices(PHASED_RELEASE_ACTIONS),
+    )
+    .option(...YES)
+    .action(
+      async (versionId: string, action: string, options, command: Command) => {
+        await runWrite(
+          command,
+          phasedReleaseInput,
+          { versionId, action, yes: options.yes },
+          setPhasedRelease,
+        );
+      },
+    );
 
   const metadata = program
     .command("metadata")
@@ -446,6 +587,64 @@ export function createProgram(
           yes: options.yes,
         },
         setAvailability,
+      );
+    });
+
+  const iap = program
+    .command("iap")
+    .description(
+      "An app's in-app purchases: reference name, product ID, type and review state. A product missing from the app is often one never submitted for review. Read only: change products in App Store Connect.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option(
+      "--type <types>",
+      `only these types, comma-separated: ${IAP_TYPES.join(", ")}`,
+    )
+    .option(
+      "--state <states>",
+      `only these states, comma-separated, such as ${PRODUCT_STATES.slice(3, 6).join(",")}`,
+    )
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (appId: string, options, command: Command) => {
+      await run(command, iapListInput, { appId, ...options }, listIaps);
+    });
+
+  iap
+    .command("show")
+    .description(
+      "One in-app purchase: its review state, localizations, availability, base territory, the prices in effect today in each territory, and its offer codes with their counts (never the codes).",
+    )
+    .argument("<iap-id>", "in-app purchase id from the iap command")
+    .action(async (iapId: string, _options, command: Command) => {
+      await run(command, iapInput, { iapId }, getIap);
+    });
+
+  const subscriptions = program
+    .command("subscriptions")
+    .description(
+      "An app's subscription groups, each with its subscriptions' reference name, product ID, period, level and review state. Read only: change subscriptions in App Store Connect.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .action(async (appId: string, _options, command: Command) => {
+      await run(command, subscriptionsInput, { appId }, listSubscriptions);
+    });
+
+  subscriptions
+    .command("show")
+    .description(
+      "One subscription: its review state, localizations, availability, the price in effect today and scheduled changes in each territory, introductory offers that have not ended, promotional offers, offer codes with their counts (never the codes) and win-back offers that have not ended.",
+    )
+    .argument(
+      "<subscription-id>",
+      "subscription id from the subscriptions command",
+    )
+    .action(async (subscriptionId: string, _options, command: Command) => {
+      await run(
+        command,
+        subscriptionInput,
+        { subscriptionId },
+        getSubscription,
       );
     });
 
@@ -1014,6 +1213,65 @@ export function createProgram(
     });
 
   builds
+    .command("upload")
+    .description(
+      "Upload an .ipa or .pkg to App Store Connect through the API and print the build upload's id and state. Without --yes, checks the file and the app and prints what would be uploaded. With --wait, then waits for the build as builds wait does. Needs a key with the App Manager or Developer role.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option("--file <path>", "the exported .ipa, or .pkg for a Mac app")
+    .option(
+      "--app-version <version>",
+      "the build's CFBundleShortVersionString, such as 1.2.0",
+    )
+    .option(
+      "--build-number <number>",
+      "the build's CFBundleVersion, such as 42",
+    )
+    .option(
+      "--platform <platform>",
+      "IOS, MAC_OS, TV_OS or VISION_OS (default: MAC_OS for a .pkg, IOS for an .ipa)",
+    )
+    .option(
+      "--wait",
+      "after uploading, wait until the build finishes processing",
+    )
+    .option("--timeout <minutes>", "with --wait, give up after this long", "30")
+    .option(
+      "--interval <seconds>",
+      "with --wait, time between checks, 10 to 300",
+      "30",
+    )
+    .option(...YES)
+    .action(async (appId: string, options, command: Command) => {
+      const writeErr = stderr(command);
+      let failed: string | undefined;
+      await runWrite(
+        command,
+        buildUploadInput,
+        {
+          appId,
+          // `builds` also defines --build-number, so Commander hands it to the parent.
+          buildNumber: command.parent?.opts().buildNumber,
+          version: options.appVersion,
+          ...options,
+        },
+        async (client, input) => {
+          const result = await uploadBuild(client, input, {
+            sleep,
+            now,
+            progress: (line) => writeErr(`${line}\n`),
+          });
+          const state = "build" in result ? result.build.processingState : "";
+          if (state && state !== "VALID") failed = state;
+          return result;
+        },
+      );
+      if (failed) {
+        command.error(`The build finished processing as ${failed}.`);
+      }
+    });
+
+  builds
     .command("compliance")
     .description(
       "Answer a build's export compliance question so it can be tested and submitted. Without --yes, prints the build and its current answer. Setting ITSAppUsesNonExemptEncryption in Info.plist answers it for future builds. Needs a key with the App Manager role.",
@@ -1038,6 +1296,22 @@ export function createProgram(
           yes: options.yes,
         },
         setBuildCompliance,
+      );
+    });
+
+  builds
+    .command("expire")
+    .description(
+      "Expire a build so testers can no longer install it from TestFlight. This cannot be undone. Without --yes, prints the build and whether it is already expired. Needs a key with the App Manager role.",
+    )
+    .argument("<build-id>", "build id from the builds command")
+    .option(...YES)
+    .action(async (buildId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        expireInput,
+        { buildId, yes: options.yes },
+        expireBuild,
       );
     });
 
@@ -1201,6 +1475,32 @@ export function createProgram(
         notesInput,
         { buildId, locale: options.locale, whatsNew, yes: options.yes },
         setBuildNotes,
+      );
+    });
+
+  const betaReview = testflight
+    .command("review")
+    .description(
+      "A build's beta app review: the submission's state (WAITING_FOR_REVIEW, IN_REVIEW, REJECTED or APPROVED, or null if never submitted) and the build's external and internal TestFlight states.",
+    )
+    .argument("<build-id>", "build id from the builds command")
+    .action(async (buildId: string, _options, command: Command) => {
+      await run(command, betaReviewInput, { buildId }, getBetaReview);
+    });
+
+  betaReview
+    .command("submit")
+    .description(
+      "Submit a build for beta app review, which it needs before external groups can test it. The app's review details (contact and, if required, demo account) must be filled in first; missing ones are named in the error. Without --yes, prints the build and any existing submission.",
+    )
+    .argument("<build-id>", "build id from the builds command")
+    .option(...YES)
+    .action(async (buildId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        submitBetaReviewInput,
+        { buildId, yes: options.yes },
+        submitBetaReview,
       );
     });
 
@@ -1520,6 +1820,152 @@ export function createProgram(
     .option(...CURSOR)
     .action(async (options, command: Command) => {
       await run(command, devicesInput, options, listDevices);
+    });
+
+  program
+    .command("metrics")
+    .description(
+      "Power and performance metrics (hangs, launch time, disk writes, memory, battery and more) for an app or one build, summarised: Apple's regression and trend insights, then each metric's percentile and device datasets as version and value points.",
+    )
+    .argument("[app-id]", "numeric app ID from the apps command")
+    .option(
+      "--build <build-id>",
+      "read one build's metrics instead (id from the builds command)",
+    )
+    .option(
+      "--type <types>",
+      "only these metric types, comma-separated: DISK, HANG, BATTERY, LAUNCH, MEMORY, ANIMATION, TERMINATION, STORAGE",
+    )
+    .option(
+      "--device <types>",
+      "only this device type, as Apple names it, such as iPhone15,2",
+    )
+    .action(async (appId: string | undefined, options, command: Command) => {
+      await run(
+        command,
+        metricsInput,
+        { appId, buildId: options.build, ...options },
+        getMetrics,
+      );
+    });
+
+  const diagnostics = program
+    .command("diagnostics")
+    .description(
+      "A build's top diagnostic signatures (hangs, disk writes, launches), heaviest first. Read one signature's logs with diagnostics logs.",
+    )
+    .argument("<build-id>", "build id from the builds command")
+    .addOption(
+      new Option("--type <type>", "only this diagnostic type").choices([
+        ...DIAGNOSTIC_TYPES,
+      ]),
+    )
+    .option(...(LIMIT as [string, string, string]))
+    .action(async (buildId: string, options, command: Command) => {
+      await run(
+        command,
+        diagnosticsInput,
+        { buildId, ...options },
+        listDiagnostics,
+      );
+    });
+
+  diagnostics
+    .command("logs")
+    .description(
+      "A diagnostic signature's logs, summarised: each log's device, OS and app version, and per call stack the heaviest path of frames, marking the one Apple blames. --limit caps the number of logs.",
+    )
+    .argument("<signature-id>", "signature id from the diagnostics command")
+    .action(async (signatureId: string, _options, command: Command) => {
+      await run(
+        command,
+        diagnosticLogsInput,
+        // `diagnostics` defines --limit, so Commander hands it to the parent.
+        { signatureId, limit: command.parent?.opts().limit },
+        getDiagnosticLogs,
+      );
+    });
+
+  const xcodeCloud = program
+    .command("xcode-cloud")
+    .description(
+      "Xcode Cloud: products, workflows, build runs and, for one run, its actions, issues, failed tests and artifacts. Needs a key whose role can access Xcode Cloud.",
+    );
+
+  xcodeCloud
+    .command("products")
+    .description(
+      "Xcode Cloud products (apps and frameworks set up for Xcode Cloud) with their app. Use the id with xcode-cloud workflows.",
+    )
+    .option("--app <app-id>", "only the product of this app")
+    .addOption(
+      new Option("--type <type>", "only apps or frameworks").choices([
+        "APP",
+        "FRAMEWORK",
+      ]),
+    )
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (options, command: Command) => {
+      await run(
+        command,
+        productsInput,
+        { appId: options.app, ...options },
+        listProducts,
+      );
+    });
+
+  xcodeCloud
+    .command("workflows")
+    .description(
+      "A product's workflows: enabled or not, repository, last change and actions (build, test, analyze, archive).",
+    )
+    .argument("<product-id>", "product id from xcode-cloud products")
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (productId: string, options, command: Command) => {
+      await run(
+        command,
+        workflowsInput,
+        { productId, ...options },
+        listWorkflows,
+      );
+    });
+
+  xcodeCloud
+    .command("runs")
+    .description(
+      "A workflow's build runs, newest first: number, progress and result, start reason, branch or tag, pull request, commit and issue counts.",
+    )
+    .argument("<workflow-id>", "workflow id from xcode-cloud workflows")
+    .option(
+      "--branch <name>",
+      "only runs on this source or destination branch or tag; Apple has no such filter, so it applies to the page read",
+    )
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (workflowId: string, options, command: Command) => {
+      await run(command, runsInput, { workflowId, ...options }, listRuns);
+    });
+
+  xcodeCloud
+    .command("run")
+    .description(
+      "One build run: its status, then each action with its issues (errors, warnings, analyzer warnings, test failures) and, for a test action, its failed tests.",
+    )
+    .argument("<run-id>", "run id from xcode-cloud runs")
+    .action(async (runId: string, _options, command: Command) => {
+      await run(command, runInput, { runId }, getRun);
+    });
+
+  xcodeCloud
+    .command("artifacts")
+    .description(
+      "A build run's artifacts per action (logs, archives, result bundles): type, file name, size and a download link. Nothing is downloaded.",
+    )
+    .argument("<run-id>", "run id from xcode-cloud runs")
+    .action(async (runId: string, _options, command: Command) => {
+      await run(command, artifactsInput, { runId }, listArtifacts);
     });
 
   return program;

@@ -1,6 +1,6 @@
 {
   "name": "@tartinerlabs/aso",
-  "version": "0.23.0",
+  "version": "0.28.0",
   "private": true,
   "description": "Unofficial command-line tool for App Store keyword checks, rank tracking and competitor listing changes.",
   "license": "MIT",
