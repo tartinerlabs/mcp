@@ -403,6 +403,22 @@ import {
   versionsInput,
 } from "./commands/versions.ts";
 import {
+  createWebhook,
+  createWebhookInput,
+  deleteWebhook,
+  deliveriesInput,
+  listDeliveries,
+  listWebhooks,
+  pingWebhook,
+  redeliver,
+  redeliverInput,
+  setWebhook,
+  setWebhookInput,
+  WEBHOOK_EVENTS,
+  webhookActionInput,
+  webhooksInput,
+} from "./commands/webhooks.ts";
+import {
   artifactsInput,
   getRun,
   listArtifacts,
@@ -4597,6 +4613,162 @@ export function createProgram(
         clearHistoryInput,
         { testerIds, yes: options.yes },
         clearSandboxHistory,
+      );
+    });
+
+  const EVENTS_HELP = `events, comma-separated or repeated: ${WEBHOOK_EVENTS.join(", ")}`;
+  const SECRET_ENV = [
+    "--secret-env <variable>",
+    "read the signing secret from this environment variable",
+  ] as const;
+  const SECRET_OUT = [
+    "--secret-out <path>",
+    "generate a signing secret and write it to this new file (mode 600)",
+  ] as const;
+
+  const webhooks = program
+    .command("webhooks")
+    .description(
+      "An app's webhooks: name, https URL, whether it is enabled and the events it gets. Signing secrets are never printed. Needs a key with the Admin or App Manager role.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (appId: string, options, command: Command) => {
+      await run(command, webhooksInput, { appId, ...options }, listWebhooks);
+    });
+
+  webhooks
+    .command("create")
+    .description(
+      "Create a webhook that App Store Connect calls on the given events. The signing secret comes from --secret-env or is generated into --secret-out, never printed. Without --yes, prints the webhook and writes nothing.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option("--name <name>", "a name for the webhook (required)")
+    .option("--url <url>", "the https URL to call (required)")
+    .option("--event <events>", `${EVENTS_HELP} (required)`, collectList)
+    .option("--disabled", "create it disabled")
+    .option(...SECRET_ENV)
+    .option(...SECRET_OUT)
+    .option(...YES)
+    .action(async (appId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        createWebhookInput,
+        {
+          appId,
+          ...options,
+          events: options.event ?? [],
+          enabled: !options.disabled,
+        },
+        (client, input) => createWebhook(client, input),
+      );
+    });
+
+  webhooks
+    .command("set")
+    .description(
+      "Change a webhook's name, URL, events (--event replaces the list) or enabled state, or rotate its signing secret. Without --yes, prints the webhook and the change.",
+    )
+    .argument("<webhook-id>", "webhook id from the webhooks command")
+    .option("--name <name>", "a new name")
+    .option("--url <url>", "a new https URL")
+    .option("--event <events>", EVENTS_HELP, collectList)
+    .option("--enable", "enable it")
+    .option("--disable", "disable it")
+    .option(...SECRET_ENV)
+    .option(...SECRET_OUT)
+    .option(...YES)
+    .action(async (webhookId: string, options, command: Command) => {
+      if (options.enable && options.disable) {
+        command.error("[invalid_input] Give --enable or --disable, not both.");
+        return;
+      }
+      await runWrite(
+        command,
+        setWebhookInput,
+        {
+          webhookId,
+          ...options,
+          events: options.event,
+          enabled: options.enable ? true : options.disable ? false : undefined,
+        },
+        (client, input) => setWebhook(client, input),
+      );
+    });
+
+  webhooks
+    .command("delete")
+    .description(
+      "Delete a webhook; App Store Connect stops calling its URL. Without --yes, prints the webhook.",
+    )
+    .argument("<webhook-id>", "webhook id from the webhooks command")
+    .option(...YES)
+    .action(async (webhookId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        webhookActionInput,
+        { webhookId, yes: options.yes },
+        deleteWebhook,
+      );
+    });
+
+  webhooks
+    .command("ping")
+    .description(
+      "Send a test event to a webhook's URL; see the result with webhooks deliveries. Without --yes, prints the webhook.",
+    )
+    .argument("<webhook-id>", "webhook id from the webhooks command")
+    .option(...YES)
+    .action(async (webhookId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        webhookActionInput,
+        { webhookId, yes: options.yes },
+        pingWebhook,
+      );
+    });
+
+  const deliveries = webhooks
+    .command("deliveries")
+    .description(
+      "A webhook's deliveries, newest first: state, dates, event type, the HTTP status the URL answered with and the start of its response. Event payloads are left out.",
+    )
+    .argument("<webhook-id>", "webhook id from the webhooks command")
+    .addOption(
+      new Option("--state <state>", "only deliveries in this state").choices([
+        "SUCCEEDED",
+        "FAILED",
+        "PENDING",
+      ]),
+    )
+    .option("--since <date>", "only deliveries created at or after this date")
+    .option("--until <date>", "only deliveries created before this date")
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (webhookId: string, _options, command: Command) => {
+      // `webhooks` also defines --limit and --cursor, so read them with the parent's.
+      await run(
+        command,
+        deliveriesInput,
+        { webhookId, ...command.optsWithGlobals() },
+        listDeliveries,
+      );
+    });
+
+  deliveries
+    .command("redeliver")
+    .description(
+      "Send a delivery's event to its webhook again, as a new delivery. Without --yes, only names the delivery.",
+    )
+    .argument("<delivery-id>", "delivery id from webhooks deliveries")
+    .option(...YES)
+    .action(async (deliveryId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        redeliverInput,
+        { deliveryId, yes: options.yes },
+        redeliver,
       );
     });
 

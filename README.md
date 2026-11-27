@@ -461,7 +461,7 @@ For an endpoint or field no command covers, `api <method> <path>` sends one requ
 
 Only paths such as `/v1/apps`, or URLs on `https://api.appstoreconnect.apple.com`, are accepted: a URL on any other host is refused before anything is sent, so the token never leaves Apple's API. Errors are classified like every other command's (`[permission]`, `[not_found]` and so on).
 
-Team members and sandbox testers:
+Team members, sandbox testers and webhooks:
 
 | Command | What it does |
 | --- | --- |
@@ -474,8 +474,14 @@ Team members and sandbox testers:
 | `sandbox testers` | Sandbox Apple Accounts for testing in-app purchases: name, storefront, renewal rate and interrupted purchases. Account emails only with `--emails`. Creating sandbox testers is not in Apple's API. |
 | `sandbox testers set <tester-id> --territory GBR --renewal-rate MONTHLY_RENEWAL_EVERY_FIVE_MINUTES` | Changes a tester's storefront, monthly subscription renewal rate or `--interrupt-purchases`. |
 | `sandbox testers clear-history <tester-id...>` | Clears testers' purchase history. This cannot be undone. |
+| `webhooks <app-id>` | An app's webhooks: name, URL, whether it is enabled and its events. |
+| `webhooks create <app-id> --name <name> --url https://… --event BUILD_UPLOAD_STATE_UPDATED --secret-env <variable>` | Creates a webhook for the given events (comma-separated or repeated). Only `https` URLs are accepted. The signing secret comes from the environment variable named by `--secret-env`, or `--secret-out <file>` generates one and writes it to that new file (mode 600); it is never printed, and the file is removed if Apple refuses the webhook. |
+| `webhooks set <webhook-id>` | Changes `--name`, `--url`, `--event` (replacing the list), `--enable` or `--disable`, or rotates the secret with `--secret-env` or `--secret-out`. |
+| `webhooks delete <webhook-id>` and `webhooks ping <webhook-id>` | Deletes a webhook, or sends it a test event. |
+| `webhooks deliveries <webhook-id>` | Its deliveries (`--state FAILED`, `--since`, `--until`): state, dates, event type, the HTTP status the URL answered with and the first 500 characters of its response. Event payloads are left out. |
+| `webhooks deliveries redeliver <delivery-id>` | Sends a delivery's event again as a new delivery. |
 
-Each of these writes also changes nothing without `--yes`; the dry run shows the current user, invitation or tester and the change.
+Each of these writes, `webhooks ping` included, also changes nothing without `--yes`; the dry run shows the current user, invitation, tester or webhook and the change.
 
 The key comes from options, or from environment variables when an option is not given. Nothing is stored: the `.p8` file is read on each run.
 
