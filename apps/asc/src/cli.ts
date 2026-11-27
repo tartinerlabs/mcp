@@ -173,6 +173,18 @@ import {
   metricsInput,
 } from "./commands/metrics.ts";
 import {
+  createNomination,
+  createNominationInput,
+  DEVICE_FAMILIES,
+  listNominations,
+  NOMINATION_TYPES,
+  nominationsInput,
+  setNomination,
+  setNominationInput,
+  submitNomination,
+  submitNominationInput,
+} from "./commands/nominations.ts";
+import {
   getSubmission,
   getSubmissionLog,
   listSubmissions,
@@ -4769,6 +4781,145 @@ export function createProgram(
         redeliverInput,
         { deliveryId, yes: options.yes },
         redeliver,
+      );
+    });
+
+  /** The options nominations create and set share. */
+  function nominationOptions(command: Command) {
+    const type = new Option("--type <type>", "what is nominated").choices([
+      ...NOMINATION_TYPES,
+    ]);
+    const bool = (flag: string, description: string) =>
+      new Option(`${flag} <true|false>`, description).choices([
+        "true",
+        "false",
+      ]);
+    return command
+      .addOption(type)
+      .option("--name <text>", "the nomination's name")
+      .option(
+        "--description <text>",
+        "what is new and why it should be featured",
+      )
+      .option("--notes <text>", "notes for Apple's editors")
+      .option(
+        "--publish-date <date-time>",
+        "when it goes live, such as 2026-12-01T00:00:00Z",
+      )
+      .option("--publish-end-date <date-time>", "when it stops, if it does")
+      .option(
+        "--device-families <families>",
+        `comma-separated: ${DEVICE_FAMILIES.join(", ")}`,
+      )
+      .option("--locales <locales>", "comma-separated, such as en-US,ja")
+      .option(
+        "--supplemental-materials <urls>",
+        "comma-separated links to videos or press kits",
+      )
+      .option(
+        "--events <ids>",
+        "comma-separated in-app event ids from the events command",
+      )
+      .addOption(
+        bool("--has-in-app-events", "whether in-app events go with it"),
+      )
+      .addOption(
+        bool(
+          "--launch-in-select-markets-first",
+          "whether it launches in some markets first",
+        ),
+      )
+      .addOption(bool("--pre-order", "whether it is on pre-order"))
+      .option(...YES);
+  }
+
+  /** Commander's option names to the API's. */
+  const nominationFields = ({
+    publishDate,
+    supplementalMaterials,
+    preOrder,
+    ...rest
+  }: Record<string, unknown>) => ({
+    ...rest,
+    publishStartDate: publishDate,
+    supplementalMaterialsUris: supplementalMaterials,
+    preOrderEnabled: preOrder,
+  });
+
+  const nominations = program
+    .command("nominations")
+    .description(
+      "The team's featuring nominations, latest change first: name, type, state, publish dates, device families, locales, apps and in-app events. Commands that change anything need a key with the Admin, App Manager or Marketing role.",
+    )
+    .option(
+      "--app <app-id>",
+      "only nominations for this app; repeatable",
+      collectList,
+    )
+    .option(
+      "--state <states>",
+      "comma-separated: DRAFT, SUBMITTED, ARCHIVED (default DRAFT,SUBMITTED)",
+    )
+    .option("--type <types>", `comma-separated: ${NOMINATION_TYPES.join(", ")}`)
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (options, command: Command) => {
+      await run(command, nominationsInput, options, listNominations);
+    });
+
+  nominationOptions(
+    nominations
+      .command("create")
+      .description(
+        "Create a draft nomination for one or more apps; send it with nominations submit. Without --yes, prints the nomination and the apps it names.",
+      )
+      .option(
+        "--app <app-id>",
+        "the app nominated; repeat or comma-separate for more (required)",
+        collectList,
+      ),
+  ).action(async (_options, command: Command) => {
+    await runWrite(
+      command,
+      createNominationInput,
+      // `nominations` also defines --app and --type, so read them with the parent's.
+      nominationFields(command.optsWithGlobals()),
+      createNomination,
+    );
+  });
+
+  nominationOptions(
+    nominations
+      .command("set")
+      .description(
+        "Change a draft nomination's fields; --events replaces its in-app events. Without --yes, prints the nomination and the new values.",
+      )
+      .argument(
+        "<nomination-id>",
+        "nomination id from the nominations command",
+      ),
+  ).action(async (nominationId: string, _options, command: Command) => {
+    await runWrite(
+      command,
+      setNominationInput,
+      { nominationId, ...nominationFields(command.optsWithGlobals()) },
+      setNomination,
+    );
+  });
+
+  nominations
+    .command("submit")
+    .description(
+      "Send a draft nomination to Apple. Refuses one whose publish date has passed. Without --yes, prints the nomination.",
+    )
+    .argument("<nomination-id>", "nomination id from the nominations command")
+    .option(...YES)
+    .action(async (nominationId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        submitNominationInput,
+        { nominationId, yes: options.yes },
+        submitNomination,
       );
     });
 
