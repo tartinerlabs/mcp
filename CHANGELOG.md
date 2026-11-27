@@ -1,3 +1,9 @@
+## [0.31.1](https://github.com/tartinerlabs/mcp/compare/v0.31.0...v0.31.1) (2026-11-27)
+
+### Bug Fixes
+
+* **asc:** include relationships commands read ([80eb173](https://github.com/tartinerlabs/mcp/commit/80eb1737c23bfdc92072b97a72859406356d2604))
+
 ## [0.31.0](https://github.com/tartinerlabs/mcp/compare/v0.30.0...v0.31.0) (2026-11-27)
 
 ### Features
