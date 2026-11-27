@@ -417,12 +417,18 @@ export async function detachReviewFile(
       "assetDeliveryState",
       "appStoreReviewDetail",
     ],
+    include: "appStoreReviewDetail",
+    "fields[appStoreReviewDetails]": ["appStoreVersion"],
   });
   const detailId = attachment.relationships?.appStoreReviewDetail?.data?.id;
   const detail = detailId
     ? await client.get<{ data: AscResource }>(
         `/v1/appStoreReviewDetails/${detailId}`,
-        { "fields[appStoreReviewDetails]": ["appStoreVersion"] },
+        {
+          "fields[appStoreReviewDetails]": ["appStoreVersion"],
+          include: "appStoreVersion",
+          "fields[appStoreVersions]": ["versionString"],
+        },
       )
     : undefined;
   const versionId = detail?.data.relationships?.appStoreVersion?.data?.id;

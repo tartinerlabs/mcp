@@ -308,12 +308,20 @@ export async function createCustomPage(
       }
       throw error;
     });
+  // Apple may leave relationships out of the response, so read the version when it does.
+  const versionId =
+    created.data.relationships?.appCustomProductPageVersions?.data?.[0]?.id ??
+    (
+      await client.get<AscDocument<unknown>>(
+        `/v1/appCustomProductPages/${created.data.id}/appCustomProductPageVersions`,
+        { "fields[appCustomProductPageVersions]": ["state"], limit: 1 },
+      )
+    ).data[0]?.id;
   return {
     dryRun: false,
     action: "create",
     page: shapePage(created.data),
-    versionId:
-      created.data.relationships?.appCustomProductPageVersions?.data?.[0]?.id,
+    versionId,
   };
 }
 
@@ -509,6 +517,7 @@ export async function reviewDraft(
     `/v1/reviewSubmissions/${draft.id}/items`,
     {
       "fields[reviewSubmissionItems]": ["state", item.relationship],
+      include: item.relationship,
       limit: 200,
     },
   );

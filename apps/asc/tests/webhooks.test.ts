@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AscClient } from "../src/asc/client.ts";
 import { AscApiError } from "../src/utils/errors.ts";
+import { appleIncludes } from "./apple-includes.ts";
 import { mockClient, runCli } from "./team-harness.ts";
 
 const SECRET = "s3cret-value-that-is-long-enough";
@@ -39,7 +40,9 @@ afterEach(() => {
 describe("webhooks", () => {
   it("should list an app's webhooks", async () => {
     const asc = mockClient({
-      get: vi.fn(async () => ({ data: [webhook] })) as AscClient["get"],
+      get: vi.fn(
+        appleIncludes(async () => ({ data: [webhook] })),
+      ) as AscClient["get"],
     });
     const result = await runCli(["webhooks", "123"], asc);
     expect(result.exitCode).toBe(0);
@@ -214,7 +217,9 @@ describe("webhooks set", () => {
   it("should show the change without --yes and patch with --yes", async () => {
     vi.stubEnv("NEW_SECRET", SECRET);
     const asc = mockClient({
-      get: vi.fn(async () => ({ data: webhook })) as AscClient["get"],
+      get: vi.fn(
+        appleIncludes(async () => ({ data: webhook })),
+      ) as AscClient["get"],
       patch: vi.fn(async () => ({ data: webhook })) as AscClient["patch"],
     });
     const dry = await runCli(
@@ -273,7 +278,9 @@ describe("webhooks set", () => {
 describe("webhooks delete and ping", () => {
   it("should delete and ping only with --yes", async () => {
     const asc = mockClient({
-      get: vi.fn(async () => ({ data: webhook })) as AscClient["get"],
+      get: vi.fn(
+        appleIncludes(async () => ({ data: webhook })),
+      ) as AscClient["get"],
       delete: vi.fn(async () => {}) as AscClient["delete"],
       post: vi.fn(async () => ({
         data: { type: "webhookPings", id: "P1" },

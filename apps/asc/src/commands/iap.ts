@@ -736,7 +736,10 @@ export async function priceIap(
 ) {
   const base = `/v2/inAppPurchases/${input.iapId}`;
   const schedule = await unlessMissing(
-    client.get<{ data: AscResource }>(`${base}/iapPriceSchedule`),
+    client.get<{ data: AscResource }>(`${base}/iapPriceSchedule`, {
+      include: ["baseTerritory"],
+      "fields[territories]": ["currency"],
+    }),
   );
   const existing = schedule
     ? await readManualPrices(

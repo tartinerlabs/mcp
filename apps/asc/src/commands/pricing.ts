@@ -383,7 +383,10 @@ export async function setPricing(
   input: z.output<typeof setPricingInput>,
 ) {
   const current = await client
-    .get<{ data: AscResource }>(`/v1/apps/${input.appId}/appPriceSchedule`)
+    .get<{ data: AscResource }>(`/v1/apps/${input.appId}/appPriceSchedule`, {
+      include: ["baseTerritory"],
+      "fields[territories]": ["currency"],
+    })
     .catch((error: unknown) => {
       // An app never priced has no schedule.
       if (error instanceof AscApiError && error.status === 404) return null;

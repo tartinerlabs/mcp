@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AscClient } from "../src/asc/client.ts";
 import { type AscClientProvider, createProgram } from "../src/cli.ts";
 import { AscApiError } from "../src/utils/errors.ts";
+import { appleIncludes } from "./apple-includes.ts";
 
 /** Runs the CLI, capturing stdout, stderr and the exit code. */
 async function run(args: string[], provider: AscClientProvider) {
@@ -80,159 +81,165 @@ function releaseClient({
   },
   otherBuild = {},
 }: Setup = {}) {
-  const get = vi.fn((path: string, query: Record<string, unknown> = {}) => {
-    if (path === "/v1/appStoreVersions/V1") {
-      const included = [];
-      if (build) included.push({ type: "builds", id: "B1", attributes: build });
-      if (phasedState) {
-        included.push({
-          type: "appStoreVersionPhasedReleases",
-          id: "PR1",
-          attributes: { phasedReleaseState: phasedState, currentDayNumber: 3 },
-        });
-      }
-      return Promise.resolve({
-        data: {
-          type: "appStoreVersions",
-          id: "V1",
-          attributes: {
-            platform: "IOS",
-            versionString: "2.0",
-            appVersionState: state,
-            releaseType: "MANUAL",
-          },
-          relationships: {
-            app: { data: { type: "apps", id: "123" } },
-            build: { data: build ? { type: "builds", id: "B1" } : null },
-            appStoreVersionPhasedRelease: {
-              data: phasedState
-                ? { type: "appStoreVersionPhasedReleases", id: "PR1" }
-                : null,
-            },
-          },
-        },
-        included,
-      });
-    }
-    if (path === "/v1/builds/B2") {
-      return Promise.resolve({
-        data: {
-          type: "builds",
-          id: "B2",
-          attributes: {
-            version: "43",
-            processingState: otherBuild.processingState ?? "VALID",
-            expired: false,
-            usesNonExemptEncryption: null,
-          },
-          relationships: {
-            app: { data: { type: "apps", id: otherBuild.app ?? "123" } },
-            preReleaseVersion: {
-              data: { type: "preReleaseVersions", id: "P" },
-            },
-          },
-        },
-        included: [
-          {
-            type: "preReleaseVersions",
-            id: "P",
+  const get = vi.fn(
+    appleIncludes((path: string, query: Record<string, unknown> = {}) => {
+      if (path === "/v1/appStoreVersions/V1") {
+        const included = [];
+        if (build)
+          included.push({ type: "builds", id: "B1", attributes: build });
+        if (phasedState) {
+          included.push({
+            type: "appStoreVersionPhasedReleases",
+            id: "PR1",
             attributes: {
-              version: "2.0",
-              platform: otherBuild.platform ?? "IOS",
+              phasedReleaseState: phasedState,
+              currentDayNumber: 3,
             },
-          },
-        ],
-      });
-    }
-    if (path === "/v1/reviewSubmissions") {
-      const ready = query["filter[state]"] === "READY_FOR_REVIEW";
-      const data = ready
-        ? drafts.map((draft) => ({
-            type: "reviewSubmissions",
-            id: draft.id,
-            attributes: { state: "READY_FOR_REVIEW" },
-          }))
-        : submissions.map((submission) => ({
-            type: "reviewSubmissions",
-            id: submission.id,
+          });
+        }
+        return Promise.resolve({
+          data: {
+            type: "appStoreVersions",
+            id: "V1",
             attributes: {
-              state: submission.state,
-              submittedDate: "2026-11-01",
+              platform: "IOS",
+              versionString: "2.0",
+              appVersionState: state,
+              releaseType: "MANUAL",
             },
             relationships: {
-              appStoreVersionForReview: {
-                data: {
-                  type: "appStoreVersions",
-                  id: submission.version ?? "V1",
-                },
+              app: { data: { type: "apps", id: "123" } },
+              build: { data: build ? { type: "builds", id: "B1" } : null },
+              appStoreVersionPhasedRelease: {
+                data: phasedState
+                  ? { type: "appStoreVersionPhasedReleases", id: "PR1" }
+                  : null,
               },
             },
-          }));
-      return Promise.resolve({ data, links });
-    }
-    const items = /^\/v1\/reviewSubmissions\/(\w+)\/items$/.exec(path);
-    if (items) {
-      const ids =
-        [...drafts, ...submissions].find((entry) => entry.id === items[1])
-          ?.items ?? [];
-      return Promise.resolve({
-        data: ids.map((id, index) => ({
-          type: "reviewSubmissionItems",
-          id: `I${index}`,
-          relationships: id.startsWith("V")
-            ? { appStoreVersion: { data: { type: "appStoreVersions", id } } }
-            : { appEvent: { data: { type: "appEvents", id } } },
-        })),
-        links,
-      });
-    }
-    if (path === "/v1/apps/123/appInfos") {
-      return Promise.resolve({
-        data: [
-          {
-            type: "appInfos",
-            id: "AI1",
-            attributes: { state: "READY_FOR_DISTRIBUTION" },
           },
-          {
-            type: "appInfos",
-            id: "AI2",
-            attributes: { state: "PREPARE_FOR_SUBMISSION" },
+          included,
+        });
+      }
+      if (path === "/v1/builds/B2") {
+        return Promise.resolve({
+          data: {
+            type: "builds",
+            id: "B2",
+            attributes: {
+              version: "43",
+              processingState: otherBuild.processingState ?? "VALID",
+              expired: false,
+              usesNonExemptEncryption: null,
+            },
+            relationships: {
+              app: { data: { type: "apps", id: otherBuild.app ?? "123" } },
+              preReleaseVersion: {
+                data: { type: "preReleaseVersions", id: "P" },
+              },
+            },
           },
-        ],
-        links,
-      });
-    }
-    if (path === "/v1/appInfos/AI2/ageRatingDeclaration") {
-      return Promise.resolve({
-        data: {
-          type: "ageRatingDeclarations",
-          id: "AR2",
-          attributes: ageRating,
-        },
-      });
-    }
-    if (path === "/v1/appStoreVersions/V1/appStoreReviewDetail") {
-      return Promise.resolve({
-        data: reviewDetail && {
-          type: "appStoreReviewDetails",
-          id: "RD1",
-          attributes: reviewDetail,
-        },
-      });
-    }
-    if (path === "/v1/apps/123/accessibilityDeclarations") {
-      return Promise.resolve({
-        data: accessibility.map((attributes, index) => ({
-          type: "accessibilityDeclarations",
-          id: `AD${index}`,
-          attributes,
-        })),
-        links,
-      });
-    }
-    return Promise.reject(new Error(`unexpected GET ${path}`));
-  });
+          included: [
+            {
+              type: "preReleaseVersions",
+              id: "P",
+              attributes: {
+                version: "2.0",
+                platform: otherBuild.platform ?? "IOS",
+              },
+            },
+          ],
+        });
+      }
+      if (path === "/v1/reviewSubmissions") {
+        const ready = query["filter[state]"] === "READY_FOR_REVIEW";
+        const data = ready
+          ? drafts.map((draft) => ({
+              type: "reviewSubmissions",
+              id: draft.id,
+              attributes: { state: "READY_FOR_REVIEW" },
+            }))
+          : submissions.map((submission) => ({
+              type: "reviewSubmissions",
+              id: submission.id,
+              attributes: {
+                state: submission.state,
+                submittedDate: "2026-11-01",
+              },
+              relationships: {
+                appStoreVersionForReview: {
+                  data: {
+                    type: "appStoreVersions",
+                    id: submission.version ?? "V1",
+                  },
+                },
+              },
+            }));
+        return Promise.resolve({ data, links });
+      }
+      const items = /^\/v1\/reviewSubmissions\/(\w+)\/items$/.exec(path);
+      if (items) {
+        const ids =
+          [...drafts, ...submissions].find((entry) => entry.id === items[1])
+            ?.items ?? [];
+        return Promise.resolve({
+          data: ids.map((id, index) => ({
+            type: "reviewSubmissionItems",
+            id: `I${index}`,
+            relationships: id.startsWith("V")
+              ? { appStoreVersion: { data: { type: "appStoreVersions", id } } }
+              : { appEvent: { data: { type: "appEvents", id } } },
+          })),
+          links,
+        });
+      }
+      if (path === "/v1/apps/123/appInfos") {
+        return Promise.resolve({
+          data: [
+            {
+              type: "appInfos",
+              id: "AI1",
+              attributes: { state: "READY_FOR_DISTRIBUTION" },
+            },
+            {
+              type: "appInfos",
+              id: "AI2",
+              attributes: { state: "PREPARE_FOR_SUBMISSION" },
+            },
+          ],
+          links,
+        });
+      }
+      if (path === "/v1/appInfos/AI2/ageRatingDeclaration") {
+        return Promise.resolve({
+          data: {
+            type: "ageRatingDeclarations",
+            id: "AR2",
+            attributes: ageRating,
+          },
+        });
+      }
+      if (path === "/v1/appStoreVersions/V1/appStoreReviewDetail") {
+        return Promise.resolve({
+          data: reviewDetail && {
+            type: "appStoreReviewDetails",
+            id: "RD1",
+            attributes: reviewDetail,
+          },
+        });
+      }
+      if (path === "/v1/apps/123/accessibilityDeclarations") {
+        return Promise.resolve({
+          data: accessibility.map((attributes, index) => ({
+            type: "accessibilityDeclarations",
+            id: `AD${index}`,
+            attributes,
+          })),
+          links,
+        });
+      }
+      return Promise.reject(new Error(`unexpected GET ${path}`));
+    }),
+  );
   const client: AscClient = {
     get: get as AscClient["get"],
     post: vi.fn((path: string) =>

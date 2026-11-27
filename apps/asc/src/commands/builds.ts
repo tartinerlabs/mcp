@@ -361,7 +361,9 @@ export async function expireBuilds(
       `/v1/builds/${input.olderThan}`,
       {
         ...BUILD_QUERY,
+        include: `${BUILD_QUERY.include},app`,
         "fields[builds]": [...BUILD_QUERY["fields[builds]"], "app"],
+        "fields[apps]": ["bundleId"],
       },
     );
     if (document.data.relationships?.app?.data?.id !== input.appId) {

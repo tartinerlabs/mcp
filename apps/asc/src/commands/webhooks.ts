@@ -116,6 +116,8 @@ export async function listWebhooks(
       `/v1/apps/${input.appId}/webhooks`,
       {
         "fields[webhooks]": WEBHOOK_FIELDS,
+        include: "app",
+        "fields[apps]": ["bundleId"],
         limit: input.limit,
         cursor: input.cursor,
       },
@@ -282,7 +284,11 @@ const webhookIdSchema = idSchema("webhooks");
 async function readWebhook(client: AscClient, webhookId: string) {
   const document = await client.get<{ data: AscResource<WebhookAttributes> }>(
     `/v1/webhooks/${webhookId}`,
-    { "fields[webhooks]": WEBHOOK_FIELDS },
+    {
+      "fields[webhooks]": WEBHOOK_FIELDS,
+      include: "app",
+      "fields[apps]": ["bundleId"],
+    },
   );
   return shapeWebhook(document.data);
 }

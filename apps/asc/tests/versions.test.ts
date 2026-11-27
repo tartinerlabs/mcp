@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AscClient } from "../src/asc/client.ts";
 import { createProgram } from "../src/cli.ts";
+import { appleIncludes } from "./apple-includes.ts";
 
 /** Runs the CLI, capturing stdout, stderr and the exit code. */
 async function run(args: string[], client: AscClient) {
@@ -125,7 +126,7 @@ function versionsClient({
     return Promise.reject(new Error(`unexpected GET ${path}`));
   });
   const client: AscClient = {
-    get: get as AscClient["get"],
+    get: vi.fn(appleIncludes(get)) as AscClient["get"],
     post: vi.fn((path: string) => {
       if (path === failPost) return Promise.reject(new Error("boom"));
       return Promise.resolve(

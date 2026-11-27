@@ -5,6 +5,7 @@ import type { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AscClient } from "../src/asc/client.ts";
 import { createProgram } from "../src/cli.ts";
+import { appleIncludes } from "./apple-includes.ts";
 
 type Query = Record<string, unknown>;
 type Route = (query: Query) => unknown;
@@ -26,7 +27,7 @@ function mockClient(routes: Record<string, Route>) {
   );
   const fail = () => Promise.reject(new Error("unexpected call"));
   const client = {
-    get,
+    get: vi.fn(appleIncludes(get)),
     post,
     patch,
     delete: del,

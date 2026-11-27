@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AscClient } from "../src/asc/client.ts";
 import { createProgram } from "../src/cli.ts";
 import { AscApiError } from "../src/utils/errors.ts";
+import { appleIncludes } from "./apple-includes.ts";
 
 const SECRET = "hunter2-demo-secret";
 
@@ -153,7 +154,7 @@ function reviewClient({
     return Promise.reject(new Error(`unexpected GET ${path}`));
   });
   const client: AscClient = {
-    get: get as AscClient["get"],
+    get: vi.fn(appleIncludes(get)) as AscClient["get"],
     post: vi.fn((path: string) =>
       Promise.resolve(
         path === "/v1/appStoreReviewDetails"

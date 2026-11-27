@@ -8,6 +8,7 @@ import type { AscClient, AscQuery } from "../src/asc/client.ts";
 import { type AscClientProvider, createProgram } from "../src/cli.ts";
 import { planSchedule } from "../src/commands/pricing.ts";
 import { AscApiError } from "../src/utils/errors.ts";
+import { appleIncludes } from "./apple-includes.ts";
 
 type Route = unknown | ((query: AscQuery) => unknown);
 
@@ -25,15 +26,17 @@ function mock(
     return Promise.resolve(value ?? { data: { id: "NEW" } });
   };
   const client: AscClient = {
-    get: vi.fn((path: string, query: AscQuery = {}) => {
-      if (!(path in routes)) {
-        return Promise.reject(new AscApiError(404, { errors: [] }));
-      }
-      const route = routes[path];
-      return Promise.resolve(
-        typeof route === "function" ? route(query) : route,
-      );
-    }) as AscClient["get"],
+    get: vi.fn(
+      appleIncludes((path: string, query: AscQuery = {}) => {
+        if (!(path in routes)) {
+          return Promise.reject(new AscApiError(404, { errors: [] }));
+        }
+        const route = routes[path];
+        return Promise.resolve(
+          typeof route === "function" ? route(query) : route,
+        );
+      }),
+    ) as AscClient["get"],
     post: vi.fn((path: string) => answer(`POST ${path}`)) as AscClient["post"],
     patch: vi.fn((path: string) =>
       answer(`PATCH ${path}`),

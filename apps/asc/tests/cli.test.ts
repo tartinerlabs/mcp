@@ -14,6 +14,7 @@ import {
   CredentialsError,
   UnexpectedResponseError,
 } from "../src/utils/errors.ts";
+import { appleIncludes } from "./apple-includes.ts";
 
 /** Write (and report download) methods for read-only tests: any call fails the test. */
 function noWrites(): Pick<
@@ -3501,7 +3502,7 @@ function customPagesClient({
   );
   const client: AscClient = {
     ...base.client,
-    get: get as AscClient["get"],
+    get: vi.fn(appleIncludes(get)) as AscClient["get"],
     post: post as AscClient["post"],
     patch: patch as AscClient["patch"],
   };
@@ -4176,7 +4177,7 @@ function pageTestsClient({
   });
   const client: AscClient = {
     ...base.client,
-    get: get as AscClient["get"],
+    get: vi.fn(appleIncludes(get)) as AscClient["get"],
     post: post as AscClient["post"],
     patch: patch as AscClient["patch"],
   };
@@ -4830,7 +4831,7 @@ function eventsClient({
   });
   const client: AscClient = {
     ...base.client,
-    get: get as AscClient["get"],
+    get: vi.fn(appleIncludes(get)) as AscClient["get"],
     post: post as AscClient["post"],
     patch: patch as AscClient["patch"],
   };

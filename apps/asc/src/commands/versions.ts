@@ -240,6 +240,8 @@ export async function createVersion(
       data: AscResource<VersionAttributes>;
     }>(`/v1/appStoreVersions/${input.copyFrom}`, {
       "fields[appStoreVersions]": ["versionString", "platform", "app"],
+      include: "app",
+      "fields[apps]": ["bundleId"],
     });
     const sourceApp = data.relationships?.app?.data?.id;
     if (sourceApp !== undefined && sourceApp !== input.appId) {

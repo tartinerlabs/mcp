@@ -53,7 +53,9 @@ export async function readVersion(client: AscClient, versionId: string) {
     data: AscResource<VersionAttributes>;
     included?: AscResource[];
   }>(`/v1/appStoreVersions/${versionId}`, {
-    include: "build,appStoreVersionPhasedRelease",
+    // Apple returns a relationship's id only when it is included.
+    include: "app,build,appStoreVersionPhasedRelease",
+    "fields[apps]": ["bundleId"],
     "fields[appStoreVersions]": [
       "platform",
       "versionString",
@@ -158,7 +160,8 @@ export async function attachBuild(
     data: AscResource<BuildAttributes>;
     included?: AscResource<{ platform?: string; version?: string }>[];
   }>(`/v1/builds/${input.buildId}`, {
-    include: "preReleaseVersion",
+    include: "preReleaseVersion,app",
+    "fields[apps]": ["bundleId"],
     "fields[builds]": [
       "version",
       "processingState",
@@ -243,6 +246,8 @@ export async function openSubmission(client: AscClient, version: Version) {
       "submittedDate",
       "appStoreVersionForReview",
     ],
+    include: "appStoreVersionForReview",
+    "fields[appStoreVersions]": ["versionString"],
     limit: 200,
   });
   const submission = response.data.find(
@@ -462,6 +467,8 @@ export async function cancelReview(
     `/v1/reviewSubmissions/${submission.id}/items`,
     {
       "fields[reviewSubmissionItems]": ["state", "appStoreVersion"],
+      include: "appStoreVersion",
+      "fields[appStoreVersions]": ["versionString"],
       limit: 200,
     },
   );
