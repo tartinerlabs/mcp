@@ -125,6 +125,39 @@ import {
   uploadEventMedia,
 } from "./commands/events.ts";
 import {
+  ACHIEVEMENT,
+  changeMembers,
+  createAchievement,
+  createAchievementInput,
+  createLeaderboard,
+  createLeaderboardInput,
+  createLeaderboardSet,
+  createLeaderboardSetInput,
+  deleteItem,
+  deleteLocale,
+  deleteLocaleInput,
+  FORMATTERS,
+  gameCenterInput,
+  getGameCenter,
+  itemInput,
+  itemWriteInput,
+  LEADERBOARD,
+  LEADERBOARD_SET,
+  membersInput,
+  SORT_TYPES,
+  SUBMISSION_TYPES,
+  setAchievement,
+  setAchievementInput,
+  setLeaderboard,
+  setLeaderboardInput,
+  setLeaderboardSet,
+  setLeaderboardSetInput,
+  showItem,
+  uploadImage,
+  uploadImageInput,
+  VISIBILITIES,
+} from "./commands/game-center.ts";
+import {
   createIap,
   createIapInput,
   createSubscription,
@@ -3385,6 +3418,334 @@ export function createProgram(
         deleteReplyInput,
         { reviewId, yes: options.yes },
         deleteReviewReply,
+      );
+    });
+
+  const gameCenter = program
+    .command("game-center")
+    .description(
+      "Whether an app has Game Center, the group it shares items with, and its leaderboards, leaderboard sets and achievements with each one's newest version and state. Commands that change anything need a key with the App Manager role; a change to something live starts a new version, which goes live after App Review.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .action(async (appId: string, _options, command: Command) => {
+      await run(command, gameCenterInput, { appId }, getGameCenter);
+    });
+
+  const leaderboards = gameCenter
+    .command("leaderboards")
+    .description(
+      "Show, create, change and delete Game Center leaderboards, their localizations and images.",
+    );
+  const leaderboardSets = gameCenter
+    .command("leaderboard-sets")
+    .description(
+      "Show, create, change and delete Game Center leaderboard sets, the leaderboards in them, their localizations and images.",
+    );
+  const achievements = gameCenter
+    .command("achievements")
+    .description(
+      "Show, create, change and delete Game Center achievements, their localizations and images.",
+    );
+  for (const [group, kind] of [
+    [leaderboards, LEADERBOARD],
+    [leaderboardSets, LEADERBOARD_SET],
+    [achievements, ACHIEVEMENT],
+  ] as const) {
+    group
+      .command("show")
+      .description(
+        `One ${kind.label}: its attributes${kind === LEADERBOARD_SET ? ", leaderboards" : ""}, its versions and states, and the newest version's localizations with their images.`,
+      )
+      .argument("<id>", `${kind.label} id from the game-center command`)
+      .action(async (id: string, _options, command: Command) => {
+        await run(command, itemInput, { id }, showItem(kind));
+      });
+    group
+      .command("delete")
+      .description(
+        `Delete a ${kind.label}. Apple may refuse one that has been live${kind.archivable ? "; archive it with set --archived true instead" : ""}. Without --yes, prints it with its newest version.`,
+      )
+      .argument("<id>", `${kind.label} id from the game-center command`)
+      .option(...YES)
+      .action(async (id: string, options, command: Command) => {
+        await runWrite(
+          command,
+          itemWriteInput,
+          { id, ...options },
+          deleteItem(kind),
+        );
+      });
+    group
+      .command("delete-locale")
+      .description(
+        `Remove one locale's localization and image from a ${kind.label}, starting a new version when the newest is live. Without --yes, prints the localization.`,
+      )
+      .argument("<id>", `${kind.label} id from the game-center command`)
+      .option("--locale <locale>", "the locale to remove, such as en-US")
+      .option(...YES)
+      .action(async (id: string, options, command: Command) => {
+        await runWrite(
+          command,
+          deleteLocaleInput,
+          { id, ...options },
+          deleteLocale(kind),
+        );
+      });
+    group
+      .command("upload-image")
+      .description(
+        `Upload one locale's ${kind.label} image (PNG or JPEG), replacing the one it has and starting a new version when the newest is live. Without --yes, prints the file and the image it replaces.`,
+      )
+      .argument("<id>", `${kind.label} id from the game-center command`)
+      .option("--locale <locale>", "the locale, such as en-US")
+      .option("--file <path>", "the image file (required)")
+      .option(...YES)
+      .action(async (id: string, options, command: Command) => {
+        await runWrite(
+          command,
+          uploadImageInput,
+          { id, ...options },
+          uploadImage(kind),
+        );
+      });
+  }
+  const leaderboardLocaleOptions = (command: Command) =>
+    command
+      .option("--name <text>", "the leaderboard's name in that locale")
+      .option("--description <text>", "its description")
+      .addOption(
+        new Option(
+          "--formatter-override <format>",
+          "a score format for this locale only",
+        ).choices([...FORMATTERS]),
+      )
+      .option("--formatter-suffix <text>", "text after a score, such as points")
+      .option(
+        "--formatter-suffix-singular <text>",
+        "text after a score of one, such as point",
+      );
+  const achievementLocaleOptions = (command: Command) =>
+    command
+      .option("--name <text>", "the achievement's name in that locale")
+      .option(
+        "--before-earned-description <text>",
+        "what players see before earning it",
+      )
+      .option(
+        "--after-earned-description <text>",
+        "what players see after earning it",
+      );
+  const LOCALE_OPTION = [
+    "--locale <locale>",
+    "the locale to add or change, such as en-US",
+  ] as const;
+
+  const leaderboardOptions = (command: Command, create: boolean) =>
+    command
+      .addOption(
+        new Option(
+          "--formatter <format>",
+          `how scores show${create ? " (required)" : ""}`,
+        ).choices([...FORMATTERS]),
+      )
+      .addOption(
+        new Option(
+          "--sort <order>",
+          `DESC for high scores first, ASC for low${create ? " (required)" : ""}`,
+        ).choices([...SORT_TYPES]),
+      )
+      .addOption(
+        new Option(
+          "--submission-type <type>",
+          `which score counts${create ? " (default: BEST_SCORE)" : ""}`,
+        ).choices([...SUBMISSION_TYPES]),
+      )
+      .option("--score-range-start <score>", "the lowest score accepted")
+      .option("--score-range-end <score>", "the highest score accepted")
+      .addOption(
+        new Option(
+          "--visibility <visibility>",
+          "whether players see it",
+        ).choices([...VISIBILITIES]),
+      )
+      .option(
+        "--recurrence-start <date-time>",
+        "a recurring leaderboard's first start, such as 2026-12-01T00:00:00Z",
+      )
+      .option(
+        "--recurrence-duration <duration>",
+        "how long each run lasts, such as P7D",
+      )
+      .option("--recurrence-rule <rule>", "how often it repeats, as an RRULE");
+
+  leaderboardLocaleOptions(
+    leaderboardOptions(
+      leaderboards
+        .command("create")
+        .description(
+          "Create a leaderboard on the app's Game Center, or its group's, with its first locale when given. Without --yes, prints it and how many the app has.",
+        )
+        .argument("<app-id>", "numeric app ID from the apps command")
+        .option("--vendor-id <id>", "the identifier the game uses (required)")
+        .option(
+          "--reference-name <name>",
+          "its name in App Store Connect (required)",
+        ),
+      true,
+    ).option(...LOCALE_OPTION),
+  )
+    .option(...YES)
+    .action(async (appId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        createLeaderboardInput,
+        { appId, ...options },
+        createLeaderboard,
+      );
+    });
+  leaderboardLocaleOptions(
+    leaderboardOptions(
+      leaderboards
+        .command("set")
+        .description(
+          "Change a leaderboard's attributes, or one locale's name, description and score format (adding the locale when it has none). Without --yes, prints the current and new values.",
+        )
+        .argument("<id>", "leaderboard id from the game-center command")
+        .option("--reference-name <name>", "its name in App Store Connect")
+        .option("--archived <true|false>", "archive it, or bring it back"),
+      false,
+    ).option(...LOCALE_OPTION),
+  )
+    .option(...YES)
+    .action(async (id: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setLeaderboardInput,
+        { id, ...options },
+        setLeaderboard,
+      );
+    });
+
+  leaderboardSets
+    .command("create")
+    .description(
+      "Create a leaderboard set on the app's Game Center, or its group's, with its leaderboards and first locale when given. Without --yes, prints it and how many the app has.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option("--vendor-id <id>", "the identifier the game uses (required)")
+    .option(
+      "--reference-name <name>",
+      "its name in App Store Connect (required)",
+    )
+    .option(
+      "--leaderboards <ids>",
+      "leaderboard ids to put in it, comma-separated",
+    )
+    .option(...LOCALE_OPTION)
+    .option("--name <text>", "the set's name in that locale")
+    .option(...YES)
+    .action(async (appId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        createLeaderboardSetInput,
+        { appId, ...options },
+        createLeaderboardSet,
+      );
+    });
+  leaderboardSets
+    .command("set")
+    .description(
+      "Change a leaderboard set's reference name, or one locale's name (adding the locale when it has none). Without --yes, prints the current and new values.",
+    )
+    .argument("<id>", "leaderboard set id from the game-center command")
+    .option("--reference-name <name>", "its name in App Store Connect")
+    .option(...LOCALE_OPTION)
+    .option("--name <text>", "the set's name in that locale")
+    .option(...YES)
+    .action(async (id: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setLeaderboardSetInput,
+        { id, ...options },
+        setLeaderboardSet,
+      );
+    });
+  for (const action of ["add", "remove"] as const) {
+    leaderboardSets
+      .command(action)
+      .description(
+        `${action === "add" ? "Add leaderboards to" : "Remove leaderboards from"} a leaderboard set. Without --yes, prints the set's leaderboards and which would change.`,
+      )
+      .argument("<id>", "leaderboard set id from the game-center command")
+      .option(
+        "--leaderboards <ids>",
+        "leaderboard ids, comma-separated (required)",
+      )
+      .option(...YES)
+      .action(async (id: string, options, command: Command) => {
+        await runWrite(
+          command,
+          membersInput,
+          { id, ...options },
+          changeMembers(action),
+        );
+      });
+  }
+
+  const achievementOptions = (command: Command) =>
+    command
+      .option("--points <points>", "points it is worth, 1 to 100")
+      .option(
+        "--show-before-earned <true|false>",
+        "whether players see it before earning it (default when creating: true)",
+      )
+      .option(
+        "--repeatable <true|false>",
+        "whether it can be earned again (default when creating: false)",
+      );
+  achievementLocaleOptions(
+    achievementOptions(
+      achievements
+        .command("create")
+        .description(
+          "Create an achievement on the app's Game Center, or its group's, with its first locale when given (name and both descriptions). Without --yes, prints it and how many the app has.",
+        )
+        .argument("<app-id>", "numeric app ID from the apps command")
+        .option("--vendor-id <id>", "the identifier the game uses (required)")
+        .option(
+          "--reference-name <name>",
+          "its name in App Store Connect (required)",
+        ),
+    ).option(...LOCALE_OPTION),
+  )
+    .option(...YES)
+    .action(async (appId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        createAchievementInput,
+        { appId, ...options },
+        createAchievement,
+      );
+    });
+  achievementLocaleOptions(
+    achievementOptions(
+      achievements
+        .command("set")
+        .description(
+          "Change an achievement's attributes, or one locale's name and descriptions (adding the locale needs all three). Without --yes, prints the current and new values.",
+        )
+        .argument("<id>", "achievement id from the game-center command")
+        .option("--reference-name <name>", "its name in App Store Connect")
+        .option("--archived <true|false>", "archive it, or bring it back"),
+    ).option(...LOCALE_OPTION),
+  )
+    .option(...YES)
+    .action(async (id: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setAchievementInput,
+        { id, ...options },
+        setAchievement,
       );
     });
 
