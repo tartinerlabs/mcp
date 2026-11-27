@@ -281,7 +281,15 @@ describe("versions create", () => {
   it("refuses to copy from another app's version", async () => {
     const client = versionsClient({ sourceApp: "999" });
     const result = await run(
-      ["versions", "create", "123", "--app-version", "2.5.0", "--copy-from", "V1"],
+      [
+        "versions",
+        "create",
+        "123",
+        "--app-version",
+        "2.5.0",
+        "--copy-from",
+        "V1",
+      ],
       client,
     );
     expect(result.exitCode).toBe(1);
@@ -431,4 +439,3 @@ describe("versions set", () => {
     expect(client.patch).not.toHaveBeenCalled();
   });
 });
-

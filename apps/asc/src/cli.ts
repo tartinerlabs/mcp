@@ -177,6 +177,16 @@ import {
   submitVersionInput,
 } from "./commands/release.ts";
 import {
+  attachInput,
+  attachReviewFile,
+  detachInput,
+  detachReviewFile,
+  getReviewDetails,
+  reviewDetailsInput,
+  setReviewDetails,
+  setReviewDetailsInput,
+} from "./commands/review-details.ts";
+import {
   deleteReplyInput,
   deleteReviewReply,
   replyInput,
@@ -771,6 +781,84 @@ export function createProgram(
         }
       },
     );
+
+  const reviewDetails = program
+    .command("review-details")
+    .description(
+      "A version's App Review details: contact name, phone and email, whether a demo account is needed and its user name (the password is never shown, only whether one is set), notes, attachments, and which required fields are missing.",
+    )
+    .argument("<version-id>", "version id from the versions command")
+    .action(async (versionId: string, _options, command: Command) => {
+      await run(command, reviewDetailsInput, { versionId }, getReviewDetails);
+    });
+
+  reviewDetails
+    .command("set")
+    .description(
+      "Set a version's App Review details, creating them if it has none. Only a version being prepared or rejected accepts changes. The demo account password comes from --demo-account-password or ASC_DEMO_ACCOUNT_PASSWORD, is always sent when given, and is never printed. Without --yes, prints the current and new values. Needs a key with the App Manager role.",
+    )
+    .argument("<version-id>", "version id from the versions command")
+    .option("--contact-first-name <name>", "App Review contact's first name")
+    .option("--contact-last-name <name>", "App Review contact's last name")
+    .option("--contact-phone <phone>", "contact phone, such as +1 408 555 0100")
+    .option("--contact-email <email>", "contact email")
+    .option("--demo-account-required", "App Review needs a demo account")
+    .option("--no-demo-account-required", "App Review needs no demo account")
+    .option("--demo-account-name <name>", "the demo account's user name")
+    .addOption(
+      new Option(
+        "--demo-account-password <password>",
+        "the demo account's password; prefer the environment variable, which stays out of shell history",
+      ).env("ASC_DEMO_ACCOUNT_PASSWORD"),
+    )
+    .option("--notes <text>", "notes for App Review")
+    .option(...YES)
+    .action(async (versionId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        setReviewDetailsInput,
+        { versionId, ...options },
+        setReviewDetails,
+      );
+    });
+
+  reviewDetails
+    .command("attach")
+    .description(
+      "Upload a file, such as a demo video, as an App Review attachment of a version being prepared or rejected. Without --yes, prints the version and the file. Needs a key with the App Manager role.",
+    )
+    .argument("<version-id>", "version id from the versions command")
+    .argument("<file>", "the file to attach")
+    .option(...YES)
+    .action(
+      async (versionId: string, file: string, options, command: Command) => {
+        await runWrite(
+          command,
+          attachInput,
+          { versionId, file, yes: options.yes },
+          attachReviewFile,
+        );
+      },
+    );
+
+  reviewDetails
+    .command("detach")
+    .description(
+      "Remove an App Review attachment from a version being prepared or rejected. Without --yes, prints the version and the attachment. Needs a key with the App Manager role.",
+    )
+    .argument(
+      "<attachment-id>",
+      "attachment id from the review-details command",
+    )
+    .option(...YES)
+    .action(async (attachmentId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        detachInput,
+        { attachmentId, yes: options.yes },
+        detachReviewFile,
+      );
+    });
 
   const appInfo = program
     .command("app-info")

@@ -12,6 +12,7 @@ import {
 import { EDITABLE_STATES as APP_INFO_EDITABLE_STATES } from "./app-info.ts";
 import { reviewDraft, submitForReview } from "./custom-pages.ts";
 import { EDITABLE_STATES } from "./metadata.ts";
+import { missingReviewDetails, readReviewDetail } from "./review-details.ts";
 
 /**
  * Release steps for an App Store version: attach a build, submit it for
@@ -332,8 +333,9 @@ export const submitVersionInput = z.object({
  * Submits a version for App Review on its own: it goes into a new review
  * submission, or one being prepared that holds nothing else. Refuses a
  * version that is not being prepared or rejected, has no valid build or an
- * unanswered export compliance question, is already submitted, or whose age
- * rating or accessibility declarations have unanswered questions.
+ * unanswered export compliance question, is already submitted, whose age
+ * rating or accessibility declarations have unanswered questions, or whose
+ * App Review details leave a required field blank.
  */
 export async function submitVersion(
   client: AscClient,
@@ -390,6 +392,14 @@ export async function submitVersion(
             `${entry.questions.join(", ")} (${entry.deviceFamily ?? entry.declarationId})`,
         )
         .join("; ")}. Answer them in App Store Connect first.`,
+    );
+  }
+  const reviewDetails = missingReviewDetails(
+    await readReviewDetail(client, version.id),
+  );
+  if (reviewDetails.length > 0) {
+    throw new InvalidInputError(
+      `The App Review details leave ${reviewDetails.join(", ")} blank. Set them with review-details set first.`,
     );
   }
   const item = {
