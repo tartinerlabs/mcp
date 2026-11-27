@@ -7,7 +7,9 @@ import { AscApiError } from "../src/utils/errors.ts";
 /** Runs the CLI, capturing stdout, stderr and the exit code. */
 async function run(args: string[], client: AscClient) {
   let stderr = "";
-  const program = createProgram(() => client);
+  // The metadata lint checks the listing's URLs; answer them without the network.
+  const fetch = vi.fn(async () => new Response(null, { status: 200 }));
+  const program = createProgram(() => client, { fetch });
   const all = (command: Command): Command[] => [
     command,
     ...command.commands.flatMap(all),
@@ -51,6 +53,8 @@ interface Setup {
   reviewDetail?: Record<string, unknown> | null;
   noPrice?: boolean;
   available?: boolean;
+  contentRights?: string | null;
+  primaryCategory?: string | null;
 }
 
 /** A client answering every read `versions check` makes for version V1 of app 123. */
@@ -86,6 +90,8 @@ function checkClient({
   },
   noPrice = false,
   available = true,
+  contentRights = "DOES_NOT_USE_THIRD_PARTY_CONTENT",
+  primaryCategory = "UTILITIES",
 }: Setup = {}) {
   const page = (data: unknown[]) => Promise.resolve({ data, links });
   const answers: Record<string, () => Promise<unknown>> = {
@@ -98,6 +104,7 @@ function checkClient({
             platform: "IOS",
             versionString: "2.0",
             appVersionState: state,
+            copyright: `${new Date().getFullYear()} Example Ltd`,
           },
           relationships: {
             app: { data: { type: "apps", id: "123" } },
@@ -114,7 +121,10 @@ function checkClient({
         data: {
           type: "apps",
           id: "123",
-          attributes: { primaryLocale },
+          attributes: {
+            primaryLocale,
+            contentRightsDeclaration: contentRights,
+          },
         },
       }),
 
@@ -156,8 +166,16 @@ function checkClient({
           type: "appInfos",
           id: "AI2",
           attributes: { state: "PREPARE_FOR_SUBMISSION" },
+          relationships: {
+            primaryCategory: {
+              data: primaryCategory
+                ? { type: "appCategories", id: primaryCategory }
+                : null,
+            },
+          },
         },
       ]),
+    "/v1/apps/123/inAppPurchasesV2": () => page([]),
     "/v1/appInfos/AI2/appInfoLocalizations": () =>
       page([
         {
@@ -261,9 +279,12 @@ describe("versions check", () => {
         reviewDetails: { status: "pass" },
         pricing: { status: "pass" },
         availability: { status: "pass", availableCount: 1 },
-        categories: { status: "not_available" },
-        contentRights: { status: "not_available" },
-        metadataLint: { status: "not_available" },
+        categories: { status: "pass", primaryCategory: "UTILITIES" },
+        contentRights: {
+          status: "pass",
+          contentRightsDeclaration: "DOES_NOT_USE_THIRD_PARTY_CONTENT",
+        },
+        metadataLint: { status: "pass", errors: 0, warnings: 0 },
       },
     });
     expect(report.assumptions.length).toBeGreaterThan(0);
@@ -342,6 +363,42 @@ describe("versions check", () => {
     expect(result.json().warnings).toContain(
       "screenshots: en-US has no screenshots; use screenshots upload. The App Store shows the fr-FR screenshots instead.",
     );
+  });
+
+  it("blocks a version without a primary category or content rights declaration", async () => {
+    const client = checkClient({ primaryCategory: null, contentRights: null });
+    const result = await run(["versions", "check", "V1"], client);
+    expect(result.exitCode).toBe(1);
+    const report = result.json();
+    expect(report.checks.categories.status).toBe("fail");
+    expect(report.checks.contentRights.status).toBe("fail");
+    expect(report.blocking).toContain(
+      "categories: app info AI2 has no primary category; use app-info categories AI2 --primary <category>.",
+    );
+    expect(report.blocking).toContain(
+      "contentRights: the app has no content rights declaration; use apps content-rights 123 --uses-third-party-content or --no-third-party-content.",
+    );
+  });
+
+  it("blocks on metadata lint errors", async () => {
+    const client = checkClient({
+      localization: {
+        locale: "en-US",
+        description: "Lorem ipsum dolor sit amet",
+        keywords: "habit,tracker",
+        supportUrl: "https://example.com/support",
+        whatsNew: "Fixes",
+      },
+    });
+    const result = await run(["versions", "check", "V1"], client);
+    expect(result.exitCode).toBe(1);
+    const report = result.json();
+    expect(report.checks.metadataLint.status).toBe("fail");
+    expect(
+      report.blocking.some((problem: string) =>
+        problem.startsWith("metadataLint: en-US description:"),
+      ),
+    ).toBe(true);
   });
 
   it("blocks a version already in review", async () => {

@@ -8,6 +8,8 @@ import {
 } from "./app-info.ts";
 import { getAvailability } from "./availability.ts";
 import { EDITABLE_STATES, getMetadata } from "./metadata.ts";
+import type { Finding, LintDependencies } from "./metadata-lint.ts";
+import { lintMetadata } from "./metadata-sync.ts";
 import { getPricing } from "./pricing.ts";
 import {
   missingAccessibilityAnswers,
@@ -38,14 +40,14 @@ const ASSUMPTIONS = [
   "Screenshots: the app's primary locale needs at least one screenshot, and on iOS one of them must be in an iPhone device group (a group whose name starts with IPHONE); another locale without them shows the primary locale's, so that is a warning. iPad screenshots are required only when the app runs on iPad, which the API does not say, so a primary locale without them is a warning.",
   "Accessibility declarations: an unfinished declaration blocks, as versions submit refuses it; an app without declarations passes.",
   "Pricing and availability: the app needs a price schedule with a manual price and at least one territory where it is available.",
+  "Categories and content rights: the app info needs a primary category, and the app needs a content rights declaration.",
+  "Metadata lint: the metadata lint runs with its default rules; its errors block and its warnings are warnings. With --no-url-check it makes no requests to the listing's URLs.",
 ];
 
-const NOT_AVAILABLE = {
-  status: "not_available" as Status,
-  reason: "This check is not built into the CLI yet.",
-};
-
-export const checkInput = z.object({ versionId: idSchema("versions") });
+export const checkInput = z.object({
+  versionId: idSchema("versions"),
+  checkUrls: z.boolean().default(true),
+});
 
 /** Runs a read, turning Apple's 404 into undefined, for resources an app may not have yet. */
 async function orMissing<T>(read: () => Promise<T>): Promise<T | undefined> {
@@ -61,6 +63,7 @@ async function orMissing<T>(read: () => Promise<T>): Promise<T | undefined> {
 export async function checkVersion(
   client: AscClient,
   input: z.output<typeof checkInput>,
+  dependencies: LintDependencies,
 ) {
   const version = await readVersion(client, input.versionId);
   const blocking: string[] = [];
@@ -180,8 +183,13 @@ export async function checkVersion(
   const screenshots = await getScreenshots(client, { versionId: version.id });
   // A locale without its own screenshots shows the primary language's, so only the primary locale must have them.
   const { data: app } = await client.get<{
-    data: AscResource<{ primaryLocale?: string }>;
-  }>(`/v1/apps/${version.appId}`, { "fields[apps]": ["primaryLocale"] });
+    data: AscResource<{
+      primaryLocale?: string;
+      contentRightsDeclaration?: string | null;
+    }>;
+  }>(`/v1/apps/${version.appId}`, {
+    "fields[apps]": ["primaryLocale", "contentRightsDeclaration"],
+  });
   const primaryLocale = app.attributes?.primaryLocale;
   const screenshotProblems: string[] = [];
   const screenshotWarnings: string[] = [];
@@ -301,6 +309,51 @@ export async function checkVersion(
     { availableCount: availability?.availableCount ?? 0 },
   );
 
+  const primaryCategory = appInfo?.categories.primaryCategory ?? null;
+  const categoriesCheck = result(
+    "categories",
+    appInfo && !primaryCategory
+      ? [
+          `app info ${appInfo.id} has no primary category; use app-info categories ${appInfo.id} --primary <category>.`,
+        ]
+      : [],
+    {
+      appInfoId: appInfo?.id ?? null,
+      primaryCategory,
+      secondaryCategory: appInfo?.categories.secondaryCategory ?? null,
+    },
+  );
+
+  const contentRightsDeclaration =
+    app.attributes?.contentRightsDeclaration ?? null;
+  const contentRights = result(
+    "contentRights",
+    contentRightsDeclaration
+      ? []
+      : [
+          `the app has no content rights declaration; use apps content-rights ${version.appId} --uses-third-party-content or --no-third-party-content.`,
+        ],
+    { contentRightsDeclaration },
+  );
+
+  const lint = await lintMetadata(
+    client,
+    { versionId: version.id, rules: [], checkUrls: input.checkUrls },
+    dependencies,
+  );
+  const describe = (finding: Finding) =>
+    `${finding.locale ? `${finding.locale} ` : ""}${finding.field}: ${finding.message}`;
+  const metadataLint = result(
+    "metadataLint",
+    lint.findings
+      .filter((finding) => finding.severity === "error")
+      .map(describe),
+    { errors: lint.errors, warnings: lint.warnings },
+    lint.findings
+      .filter((finding) => finding.severity === "warning")
+      .map(describe),
+  );
+
   return {
     version: {
       appId: version.appId,
@@ -324,9 +377,9 @@ export async function checkVersion(
       reviewDetails,
       pricing: pricingCheck,
       availability: availabilityCheck,
-      categories: NOT_AVAILABLE,
-      contentRights: NOT_AVAILABLE,
-      metadataLint: NOT_AVAILABLE,
+      categories: categoriesCheck,
+      contentRights,
+      metadataLint,
     },
     assumptions: ASSUMPTIONS,
   };

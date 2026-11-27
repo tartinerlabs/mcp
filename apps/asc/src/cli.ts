@@ -877,15 +877,17 @@ export function createProgram(
   versions
     .command("check")
     .description(
-      "Report whether a version is ready to submit for App Review, changing nothing: its state, build and export compliance, open review submission, required metadata and app info per locale, screenshots per locale, age rating, accessibility declarations, App Review details, pricing and availability. Lists under blocking what to fix and exits 1 when anything blocks submission. Categories, content rights and metadata lint are marked not_available.",
+      "Report whether a version is ready to submit for App Review, changing nothing: its state, build and export compliance, open review submission, required metadata and app info per locale, screenshots per locale, age rating, accessibility declarations, App Review details, pricing and availability. Lists under blocking what to fix and exits 1 when anything blocks submission. It also checks the primary category, the content rights declaration and the metadata lint; --no-url-check makes the lint skip requests to the listing's URLs.",
     )
     .argument("<version-id>", "version id from the versions command")
-    .action(async (versionId: string, _options, command: Command) => {
+    .option("--no-url-check", "skip requests to the listing's URLs")
+    .action(async (versionId: string, options, command: Command) => {
       const report = await run(
         command,
         checkInput,
-        { versionId },
-        checkVersion,
+        { versionId, checkUrls: options.urlCheck },
+        (client, parsed) =>
+          checkVersion(client, parsed, { fetch: fetchUrl, now }),
       );
       if (!report.ready) {
         command.error(
