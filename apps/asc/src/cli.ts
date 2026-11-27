@@ -25,6 +25,7 @@ import {
   requestAnalytics,
   requestAnalyticsInput,
 } from "./commands/analytics.ts";
+import { API_METHODS, apiGet, apiInput, apiWrite } from "./commands/api.ts";
 import {
   appInfoInput,
   getAppInfo,
@@ -2241,5 +2242,57 @@ export function createProgram(
       await run(command, notarizeHistoryInput, options, listSubmissions);
     });
 
+  program
+    .command("api")
+    .description(
+      "Send a request to the App Store Connect API with your key and print Apple's JSON response: an escape hatch for endpoints and fields no command covers. Only paths on api.appstoreconnect.apple.com are accepted. GET runs directly; POST, PATCH and DELETE change nothing without --yes.",
+    )
+    .addArgument(
+      new Argument("<method>", "HTTP method").choices([...API_METHODS]),
+    )
+    .argument(
+      "<path>",
+      "path such as /v1/apps, or a URL on https://api.appstoreconnect.apple.com",
+    )
+    .option(
+      "--query <key=value>",
+      "a query parameter, such as filter[platform]=IOS; repeat for more",
+      (value: string, previous: string[] = []) => [...previous, value],
+    )
+    .option(
+      "--body <file>",
+      "the JSON body for POST, PATCH or DELETE, from a file, or - for stdin",
+    )
+    .option("--paginate", "GET only: follow links.next and join every page")
+    .option(...YES)
+    .action(async (method: string, path: string, options, command: Command) => {
+      let body: string | undefined;
+      if (options.body !== undefined) {
+        try {
+          body =
+            options.body === "-"
+              ? await readStdin()
+              : await readFile(options.body, "utf8");
+        } catch {
+          return command.error(
+            `[invalid_input] Could not read the --body ${options.body}.`,
+          );
+        }
+      }
+      const input = { method, path, ...options, body };
+      if (method === "GET") {
+        await run(command, apiInput, input, apiGet);
+      } else {
+        await runWrite(command, apiInput, input, apiWrite);
+      }
+    });
+
   return program;
+}
+
+/** Everything on stdin, for --body -. */
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks).toString("utf8");
 }
