@@ -46,6 +46,7 @@ interface Setup {
   released?: boolean;
   localization?: Record<string, unknown>;
   groups?: string[];
+  primaryLocale?: string;
   appInfoLocalization?: Record<string, unknown>;
   reviewDetail?: Record<string, unknown> | null;
   noPrice?: boolean;
@@ -70,6 +71,7 @@ function checkClient({
     whatsNew: "Fixes",
   },
   groups = ["IPHONE_DYNAMIC_ISLAND_LARGE_PROFILE", "IPAD_PRO_3GEN_129_PROFILE"],
+  primaryLocale = "en-US",
   appInfoLocalization = {
     locale: "en-US",
     name: "Example",
@@ -107,6 +109,15 @@ function checkClient({
           : [],
       }),
     "/v1/reviewSubmissions": () => page([]),
+    "/v1/apps/123": () =>
+      Promise.resolve({
+        data: {
+          type: "apps",
+          id: "123",
+          attributes: { primaryLocale },
+        },
+      }),
+
     "/v1/apps/123/appStoreVersions": () =>
       page(
         released
@@ -318,6 +329,19 @@ describe("versions check", () => {
       checks: { screenshots: { status: "warn" } },
     });
     expect(result.json().warnings[0]).toContain("no iPad screenshots");
+  });
+
+  it("warns without blocking when a locale other than the primary one has no screenshots", async () => {
+    const client = checkClient({ groups: [], primaryLocale: "fr-FR" });
+    const result = await run(["versions", "check", "V1"], client);
+    expect(result.exitCode).toBe(0);
+    expect(result.json()).toMatchObject({
+      ready: true,
+      checks: { screenshots: { status: "warn" } },
+    });
+    expect(result.json().warnings).toContain(
+      "screenshots: en-US has no screenshots; use screenshots upload. The App Store shows the fr-FR screenshots instead.",
+    );
   });
 
   it("blocks a version already in review", async () => {

@@ -1,5 +1,5 @@
 import * as z from "zod";
-import type { AscClient } from "../asc/client.ts";
+import type { AscClient, AscResource } from "../asc/client.ts";
 import { idSchema } from "../schemas/common.ts";
 import { AscApiError } from "../utils/errors.ts";
 import {
@@ -35,7 +35,7 @@ const REQUIRED_METADATA = ["description", "keywords", "supportUrl"] as const;
 const ASSUMPTIONS = [
   "Required version metadata per locale: description, keywords and support URL, plus What's New once an earlier version of the app has been released on the platform.",
   "Required app info per locale: name and privacy policy URL (or privacy policy text on tvOS).",
-  "Screenshots: each version locale needs at least one screenshot; on iOS one of them must be in an iPhone device group (a group whose name starts with IPHONE). iPad screenshots are required only when the app runs on iPad, which the API does not say, so a locale without them is a warning.",
+  "Screenshots: the app's primary locale needs at least one screenshot, and on iOS one of them must be in an iPhone device group (a group whose name starts with IPHONE); another locale without them shows the primary locale's, so that is a warning. iPad screenshots are required only when the app runs on iPad, which the API does not say, so a primary locale without them is a warning.",
   "Accessibility declarations: an unfinished declaration blocks, as versions submit refuses it; an app without declarations passes.",
   "Pricing and availability: the app needs a price schedule with a manual price and at least one territory where it is available.",
 ];
@@ -178,9 +178,19 @@ export async function checkVersion(
   );
 
   const screenshots = await getScreenshots(client, { versionId: version.id });
+  // A locale without its own screenshots shows the primary language's, so only the primary locale must have them.
+  const { data: app } = await client.get<{
+    data: AscResource<{ primaryLocale?: string }>;
+  }>(`/v1/apps/${version.appId}`, { "fields[apps]": ["primaryLocale"] });
+  const primaryLocale = app.attributes?.primaryLocale;
   const screenshotProblems: string[] = [];
   const screenshotWarnings: string[] = [];
   const screenshotLocales = screenshots.localizations.map((localization) => {
+    const primary = localization.locale === primaryLocale;
+    const flag = primary ? screenshotProblems : screenshotWarnings;
+    const fallback = primary
+      ? ""
+      : ` The App Store shows the ${primaryLocale} screenshots instead.`;
     const groups = localization.groups.filter(
       (group) => group.placementType === "APP_SCREENSHOT",
     );
@@ -194,18 +204,17 @@ export async function checkVersion(
         .map((placement) => placement.fileName ?? placement.id),
     );
     if (groups.length === 0) {
-      screenshotProblems.push(
-        `${localization.locale} has no screenshots; use screenshots upload.`,
+      flag.push(
+        `${localization.locale} has no screenshots; use screenshots upload.${fallback}`,
       );
     } else if (
       version.platform === "IOS" &&
       !names.some((name) => name.startsWith("IPHONE"))
     ) {
-      screenshotProblems.push(
-        `${localization.locale} has no iPhone screenshots.`,
-      );
+      flag.push(`${localization.locale} has no iPhone screenshots.${fallback}`);
     }
     if (
+      primary &&
       version.platform === "IOS" &&
       groups.length > 0 &&
       !names.some((name) => name.startsWith("IPAD"))

@@ -366,6 +366,19 @@ describe("versions submit", () => {
     );
   });
 
+  it("should not count the optional Korea game rating number as unanswered", async () => {
+    const { provider } = releaseClient({
+      ageRating: {
+        gambling: false,
+        kidsAgeBand: null,
+        gracRatingClassificationNumber: null,
+      },
+    });
+    const result = await run(["versions", "submit", "V1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain("gracRatingClassificationNumber");
+  });
+
   it("should create a submission, add the version and submit it with --yes", async () => {
     const { client, provider } = releaseClient();
     const result = await run(["versions", "submit", "V1", "--yes"], provider);

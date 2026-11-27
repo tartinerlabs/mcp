@@ -275,6 +275,8 @@ const OPTIONAL_AGE_RATING_ANSWERS = new Set([
   "ageRatingOverrideV2",
   "koreaAgeRatingOverride",
   "developerAgeRatingInfoUrl",
+  // Korea's game rating board (GRAC) registration number: free text, only for games rated there.
+  "gracRatingClassificationNumber",
   "seventeenPlus",
   "gamblingAndContests",
 ]);
