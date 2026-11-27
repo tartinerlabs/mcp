@@ -23,9 +23,12 @@ import {
   setAvailability,
   setAvailabilityInput,
 } from "./commands/availability.ts";
+import { buildUploadInput, uploadBuild } from "./commands/build-upload.ts";
 import {
   buildsInput,
   complianceInput,
+  expireBuild,
+  expireInput,
   listBuilds,
   setBuildCompliance,
   type WaitDependencies,
@@ -64,6 +67,18 @@ import {
   uploadEventInput,
   uploadEventMedia,
 } from "./commands/events.ts";
+import {
+  getIap,
+  getSubscription,
+  IAP_TYPES,
+  iapInput,
+  iapListInput,
+  listIaps,
+  listSubscriptions,
+  PRODUCT_STATES,
+  subscriptionInput,
+  subscriptionsInput,
+} from "./commands/iap.ts";
 import {
   getMetadata,
   metadataInput,
@@ -123,8 +138,10 @@ import {
   addTestersInput,
   betaFeedbackInput,
   betaGroupsInput,
+  betaReviewInput,
   betaTestersInput,
   FEEDBACK_TYPES,
+  getBetaReview,
   listBetaFeedback,
   listBetaGroups,
   listBetaTesters,
@@ -132,6 +149,8 @@ import {
   removeTesters,
   removeTestersInput,
   setBuildNotes,
+  submitBetaReview,
+  submitBetaReviewInput,
 } from "./commands/testflight.ts";
 import { listVersions, versionsInput } from "./commands/versions.ts";
 import { PLATFORMS } from "./schemas/common.ts";
@@ -215,7 +234,7 @@ export function createProgram(
   const program = new Command()
     .name("asc")
     .description(
-      "App Store Connect with your own API key: apps, versions and their metadata, screenshots and app previews, custom product pages, product page optimization tests, in-app events, app info, pricing, availability and age rating, builds, release status, TestFlight groups, testers, feedback and notes, and customer reviews. Commands that change anything only print what they would do unless given --yes.",
+      "App Store Connect with your own API key: apps, versions and their metadata, screenshots and app previews, custom product pages, product page optimization tests, in-app events, in-app purchases and subscriptions, app info, pricing, availability and age rating, builds, release status, TestFlight groups, testers, feedback and notes, and customer reviews. Commands that change anything only print what they would do unless given --yes.",
     )
     .version(pkg.version)
     .option("--key-id <id>", "API key ID (default: ASC_KEY_ID)")
@@ -523,6 +542,64 @@ export function createProgram(
           yes: options.yes,
         },
         setAvailability,
+      );
+    });
+
+  const iap = program
+    .command("iap")
+    .description(
+      "An app's in-app purchases: reference name, product ID, type and review state. A product missing from the app is often one never submitted for review. Read only: change products in App Store Connect.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option(
+      "--type <types>",
+      `only these types, comma-separated: ${IAP_TYPES.join(", ")}`,
+    )
+    .option(
+      "--state <states>",
+      `only these states, comma-separated, such as ${PRODUCT_STATES.slice(3, 6).join(",")}`,
+    )
+    .option(...(LIMIT as [string, string, string]))
+    .option(...CURSOR)
+    .action(async (appId: string, options, command: Command) => {
+      await run(command, iapListInput, { appId, ...options }, listIaps);
+    });
+
+  iap
+    .command("show")
+    .description(
+      "One in-app purchase: its review state, localizations, availability, base territory, the prices in effect today in each territory, and its offer codes with their counts (never the codes).",
+    )
+    .argument("<iap-id>", "in-app purchase id from the iap command")
+    .action(async (iapId: string, _options, command: Command) => {
+      await run(command, iapInput, { iapId }, getIap);
+    });
+
+  const subscriptions = program
+    .command("subscriptions")
+    .description(
+      "An app's subscription groups, each with its subscriptions' reference name, product ID, period, level and review state. Read only: change subscriptions in App Store Connect.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .action(async (appId: string, _options, command: Command) => {
+      await run(command, subscriptionsInput, { appId }, listSubscriptions);
+    });
+
+  subscriptions
+    .command("show")
+    .description(
+      "One subscription: its review state, localizations, availability, the price in effect today and scheduled changes in each territory, introductory offers that have not ended, promotional offers, offer codes with their counts (never the codes) and win-back offers that have not ended.",
+    )
+    .argument(
+      "<subscription-id>",
+      "subscription id from the subscriptions command",
+    )
+    .action(async (subscriptionId: string, _options, command: Command) => {
+      await run(
+        command,
+        subscriptionInput,
+        { subscriptionId },
+        getSubscription,
       );
     });
 
@@ -1091,6 +1168,65 @@ export function createProgram(
     });
 
   builds
+    .command("upload")
+    .description(
+      "Upload an .ipa or .pkg to App Store Connect through the API and print the build upload's id and state. Without --yes, checks the file and the app and prints what would be uploaded. With --wait, then waits for the build as builds wait does. Needs a key with the App Manager or Developer role.",
+    )
+    .argument("<app-id>", "numeric app ID from the apps command")
+    .option("--file <path>", "the exported .ipa, or .pkg for a Mac app")
+    .option(
+      "--app-version <version>",
+      "the build's CFBundleShortVersionString, such as 1.2.0",
+    )
+    .option(
+      "--build-number <number>",
+      "the build's CFBundleVersion, such as 42",
+    )
+    .option(
+      "--platform <platform>",
+      "IOS, MAC_OS, TV_OS or VISION_OS (default: MAC_OS for a .pkg, IOS for an .ipa)",
+    )
+    .option(
+      "--wait",
+      "after uploading, wait until the build finishes processing",
+    )
+    .option("--timeout <minutes>", "with --wait, give up after this long", "30")
+    .option(
+      "--interval <seconds>",
+      "with --wait, time between checks, 10 to 300",
+      "30",
+    )
+    .option(...YES)
+    .action(async (appId: string, options, command: Command) => {
+      const writeErr = stderr(command);
+      let failed: string | undefined;
+      await runWrite(
+        command,
+        buildUploadInput,
+        {
+          appId,
+          // `builds` also defines --build-number, so Commander hands it to the parent.
+          buildNumber: command.parent?.opts().buildNumber,
+          version: options.appVersion,
+          ...options,
+        },
+        async (client, input) => {
+          const result = await uploadBuild(client, input, {
+            sleep,
+            now,
+            progress: (line) => writeErr(`${line}\n`),
+          });
+          const state = "build" in result ? result.build.processingState : "";
+          if (state && state !== "VALID") failed = state;
+          return result;
+        },
+      );
+      if (failed) {
+        command.error(`The build finished processing as ${failed}.`);
+      }
+    });
+
+  builds
     .command("compliance")
     .description(
       "Answer a build's export compliance question so it can be tested and submitted. Without --yes, prints the build and its current answer. Setting ITSAppUsesNonExemptEncryption in Info.plist answers it for future builds. Needs a key with the App Manager role.",
@@ -1115,6 +1251,22 @@ export function createProgram(
           yes: options.yes,
         },
         setBuildCompliance,
+      );
+    });
+
+  builds
+    .command("expire")
+    .description(
+      "Expire a build so testers can no longer install it from TestFlight. This cannot be undone. Without --yes, prints the build and whether it is already expired. Needs a key with the App Manager role.",
+    )
+    .argument("<build-id>", "build id from the builds command")
+    .option(...YES)
+    .action(async (buildId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        expireInput,
+        { buildId, yes: options.yes },
+        expireBuild,
       );
     });
 
@@ -1278,6 +1430,32 @@ export function createProgram(
         notesInput,
         { buildId, locale: options.locale, whatsNew, yes: options.yes },
         setBuildNotes,
+      );
+    });
+
+  const betaReview = testflight
+    .command("review")
+    .description(
+      "A build's beta app review: the submission's state (WAITING_FOR_REVIEW, IN_REVIEW, REJECTED or APPROVED, or null if never submitted) and the build's external and internal TestFlight states.",
+    )
+    .argument("<build-id>", "build id from the builds command")
+    .action(async (buildId: string, _options, command: Command) => {
+      await run(command, betaReviewInput, { buildId }, getBetaReview);
+    });
+
+  betaReview
+    .command("submit")
+    .description(
+      "Submit a build for beta app review, which it needs before external groups can test it. The app's review details (contact and, if required, demo account) must be filled in first; missing ones are named in the error. Without --yes, prints the build and any existing submission.",
+    )
+    .argument("<build-id>", "build id from the builds command")
+    .option(...YES)
+    .action(async (buildId: string, options, command: Command) => {
+      await runWrite(
+        command,
+        submitBetaReviewInput,
+        { buildId, yes: options.yes },
+        submitBetaReview,
       );
     });
 

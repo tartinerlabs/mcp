@@ -5961,3 +5961,307 @@ describe("age-rating set", () => {
     expect(client.patch).not.toHaveBeenCalled();
   });
 });
+
+/** A client for one build, B1 of app 123, with an optional review submission and review details. */
+function betaReviewClient({
+  submission,
+  processingState = "VALID",
+  expired = false,
+  details = {
+    contactFirstName: "Ada",
+    contactLastName: "Lovelace",
+    contactPhone: "+65 6000 0000",
+    contactEmail: "ada@example.com",
+    demoAccountRequired: false,
+  },
+}: {
+  submission?: { betaReviewState: string };
+  processingState?: string;
+  expired?: boolean;
+  details?: Record<string, unknown>;
+} = {}) {
+  const get = vi.fn((path: string) => {
+    if (path === "/v1/builds/B1") {
+      return Promise.resolve({
+        data: {
+          type: "builds",
+          id: "B1",
+          attributes: { version: "42", processingState, expired },
+          relationships: {
+            app: { data: { type: "apps", id: "123" } },
+            betaAppReviewSubmission: {
+              data: submission
+                ? { type: "betaAppReviewSubmissions", id: "S1" }
+                : null,
+            },
+            buildBetaDetail: { data: { type: "buildBetaDetails", id: "B1" } },
+          },
+        },
+        included: [
+          { type: "apps", id: "123", attributes: { name: "Example" } },
+          {
+            type: "buildBetaDetails",
+            id: "B1",
+            attributes: {
+              externalBuildState: submission
+                ? "WAITING_FOR_BETA_REVIEW"
+                : "READY_FOR_BETA_SUBMISSION",
+              internalBuildState: "IN_BETA_TESTING",
+            },
+          },
+          ...(submission
+            ? [
+                {
+                  type: "betaAppReviewSubmissions",
+                  id: "S1",
+                  attributes: {
+                    ...submission,
+                    submittedDate: "2026-11-20T00:00:00Z",
+                  },
+                },
+              ]
+            : []),
+        ],
+      });
+    }
+    if (path === "/v1/apps/123/betaAppReviewDetail") {
+      return Promise.resolve({
+        data: { type: "betaAppReviewDetails", id: "123", attributes: details },
+      });
+    }
+    return Promise.reject(new Error(`unexpected GET ${path}`));
+  });
+  const client: AscClient = {
+    ...noWrites(),
+    get: get as AscClient["get"],
+    post: vi.fn(() =>
+      Promise.resolve({
+        data: {
+          type: "betaAppReviewSubmissions",
+          id: "S2",
+          attributes: { betaReviewState: "WAITING_FOR_REVIEW" },
+        },
+      }),
+    ) as AscClient["post"],
+  };
+  return { client, provider: vi.fn<AscClientProvider>(() => client) };
+}
+
+describe("testflight review", () => {
+  it("should show the submission's state and the build's TestFlight states", async () => {
+    const { client, provider } = betaReviewClient({
+      submission: { betaReviewState: "IN_REVIEW" },
+    });
+    const result = await run(["testflight", "review", "B1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/builds/B1",
+      expect.objectContaining({
+        include: ["app", "betaAppReviewSubmission", "buildBetaDetail"],
+      }),
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      build: {
+        id: "B1",
+        version: "42",
+        processingState: "VALID",
+        expired: false,
+        appId: "123",
+        appName: "Example",
+      },
+      submission: {
+        id: "S1",
+        betaReviewState: "IN_REVIEW",
+        submittedDate: "2026-11-20T00:00:00Z",
+      },
+      externalBuildState: "WAITING_FOR_BETA_REVIEW",
+      internalBuildState: "IN_BETA_TESTING",
+    });
+  });
+
+  it("should show a null submission for a build never submitted", async () => {
+    const { provider } = betaReviewClient();
+    const result = await run(["testflight", "review", "B1"], provider);
+    expect(JSON.parse(result.stdout)).toMatchObject({ submission: null });
+  });
+});
+
+describe("testflight review submit", () => {
+  it("should check the review details and change nothing without --yes", async () => {
+    const { client, provider } = betaReviewClient();
+    const result = await run(
+      ["testflight", "review", "submit", "B1"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.get).toHaveBeenCalledWith(
+      "/v1/apps/123/betaAppReviewDetail",
+      expect.any(Object),
+    );
+    expect(client.post).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "submit-beta-review",
+      build: expect.objectContaining({ id: "B1", version: "42" }),
+      submission: null,
+      changes: true,
+    });
+    expect(result.stdout).not.toContain("ada@example.com");
+    expect(result.stderr).toContain("Dry run: nothing was changed");
+  });
+
+  it("should submit the build with --yes", async () => {
+    const { client, provider } = betaReviewClient();
+    const result = await run(
+      ["testflight", "review", "submit", "B1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).toHaveBeenCalledWith("/v1/betaAppReviewSubmissions", {
+      data: {
+        type: "betaAppReviewSubmissions",
+        relationships: { build: { data: { type: "builds", id: "B1" } } },
+      },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "submit-beta-review",
+      buildId: "B1",
+      submission: { id: "S2", betaReviewState: "WAITING_FOR_REVIEW" },
+      changed: true,
+    });
+  });
+
+  it("should not submit a build that already has a submission", async () => {
+    const { client, provider } = betaReviewClient({
+      submission: { betaReviewState: "APPROVED" },
+    });
+    const result = await run(
+      ["testflight", "review", "submit", "B1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(client.post).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      changed: false,
+      submission: { id: "S1", betaReviewState: "APPROVED" },
+    });
+  });
+
+  it("should name the missing review details instead of submitting", async () => {
+    const { client, provider } = betaReviewClient({
+      details: {
+        contactFirstName: "Ada",
+        contactLastName: " ",
+        contactPhone: null,
+        contactEmail: "ada@example.com",
+        demoAccountRequired: true,
+        demoAccountName: "demo",
+        demoAccountPassword: "",
+      },
+    });
+    const result = await run(
+      ["testflight", "review", "submit", "B1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "[invalid_input] The app's beta app review details are missing: contact last name, contact phone, demo account password.",
+    );
+    expect(client.post).not.toHaveBeenCalled();
+  });
+
+  it("should refuse a build that has not finished processing", async () => {
+    const { client, provider } = betaReviewClient({
+      processingState: "PROCESSING",
+    });
+    const result = await run(
+      ["testflight", "review", "submit", "B1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input] Build 42 is PROCESSING");
+    expect(client.post).not.toHaveBeenCalled();
+  });
+
+  it("should refuse an expired build", async () => {
+    const { client, provider } = betaReviewClient({ expired: true });
+    const result = await run(
+      ["testflight", "review", "submit", "B1", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("Build 42 has expired");
+    expect(client.post).not.toHaveBeenCalled();
+  });
+});
+
+describe("builds expire", () => {
+  function expiring(expired: boolean) {
+    const client: AscClient = {
+      ...noWrites(),
+      get: vi.fn(() =>
+        Promise.resolve({
+          data: {
+            type: "builds",
+            id: "B1",
+            attributes: { version: "42", processingState: "VALID", expired },
+          },
+        }),
+      ) as AscClient["get"],
+      patch: vi.fn(() => Promise.resolve({ data: {} })) as AscClient["patch"],
+    };
+    return { client, provider: vi.fn<AscClientProvider>(() => client) };
+  }
+
+  it("should only show the build without --yes", async () => {
+    const { client, provider } = expiring(false);
+    const result = await run(["builds", "expire", "B1"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: true,
+      action: "expire",
+      build: expect.objectContaining({
+        id: "B1",
+        version: "42",
+        expired: false,
+      }),
+      changes: true,
+    });
+    expect(result.stderr).toContain("Dry run: nothing was changed");
+  });
+
+  it("should expire the build with --yes", async () => {
+    const { client, provider } = expiring(false);
+    const result = await run(["builds", "expire", "B1", "--yes"], provider);
+    expect(result.exitCode).toBe(0);
+    expect(client.patch).toHaveBeenCalledWith("/v1/builds/B1", {
+      data: { type: "builds", id: "B1", attributes: { expired: true } },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      dryRun: false,
+      action: "expire",
+      buildId: "B1",
+      changed: true,
+    });
+  });
+
+  it("should not write when the build is already expired", async () => {
+    const { client, provider } = expiring(true);
+    const result = await run(["builds", "expire", "B1", "--yes"], provider);
+    expect(client.patch).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toMatchObject({ changed: false });
+  });
+
+  it("should reject a build id that is not one path segment", async () => {
+    const { client, provider } = expiring(false);
+    const result = await run(
+      ["builds", "expire", "../apps", "--yes"],
+      provider,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[invalid_input]");
+    expect(client.get).not.toHaveBeenCalled();
+  });
+});
