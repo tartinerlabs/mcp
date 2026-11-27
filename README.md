@@ -376,6 +376,8 @@ node apps/aso/dist/index.js competitors diff <id> <id> --snapshot competitors-us
 | `xcode-cloud runs <workflow-id>` | A workflow's build runs, newest first: progress, result, start reason, branch or tag, pull request, commit and issue counts. Apple has no branch filter, so `--branch main` filters the page that was read. |
 | `xcode-cloud run <run-id>` | One build run: its status, then each action with its issues (errors, warnings, analyzer warnings, test failures) and, for a test action with failures, its failed tests with the devices they failed on. |
 | `xcode-cloud artifacts <run-id>` | A run's artifacts per action (logs, archives, result bundles): type, file name, size and download link. Nothing is downloaded. |
+| `xcode-cloud start <workflow-id> --branch main` | Starts a workflow on a branch, tag (`--tag`) or open pull request (`--pull-request <number>`) of its repository, optionally `--clean`, and prints the new run. It uses Xcode Cloud compute hours, so without `--yes` it only prints the workflow and the reference it would build. `--wait` then polls the run (`--interval`, `--timeout`, default 60 minutes) and exits 1 unless it succeeded. |
+| `xcode-cloud rerun <run-id>` | Rebuilds an earlier run as a new run, with the same `--clean` and `--wait` options. |
 
 Each list command returns one page (up to 200, `--limit`) and reports `hasMore`; when there is more, pass the result's `nextCursor` back as `--cursor` to read the next page. A 429 from Apple is reported as `[quota]` at once, without retrying, except in `builds wait`, which backs off (1 minute, doubling up to 10) and keeps waiting. Run a command with `--help` for its filters.
 

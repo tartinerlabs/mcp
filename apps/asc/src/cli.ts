@@ -386,8 +386,13 @@ import {
   listRuns,
   listWorkflows,
   productsInput,
+  rerunInput,
+  rerunRun,
   runInput,
   runsInput,
+  startInput,
+  startRun,
+  waitForRun,
   workflowsInput,
 } from "./commands/xcode-cloud.ts";
 import { PLATFORMS } from "./schemas/common.ts";
@@ -4033,7 +4038,7 @@ export function createProgram(
   const xcodeCloud = program
     .command("xcode-cloud")
     .description(
-      "Xcode Cloud: products, workflows, build runs and, for one run, its actions, issues, failed tests and artifacts. Needs a key whose role can access Xcode Cloud.",
+      "Xcode Cloud: products, workflows, build runs and, for one run, its actions, issues, failed tests and artifacts; start or rerun a build. Needs a key whose role can access Xcode Cloud.",
     );
 
   xcodeCloud
@@ -4255,6 +4260,98 @@ export function createProgram(
     .addArgument(new Argument("<shell>", "the shell").choices([...SHELLS]))
     .action((shell: Shell) => {
       console.log(completionScript(program, shell));
+    });
+
+  /** Starts a run with `start` or `rerun`, then with --wait polls it and exits 1 unless it succeeded. */
+  async function startAndWait<Schema extends z.ZodType>(
+    command: Command,
+    schema: Schema,
+    input: Record<string, unknown>,
+    execute: (
+      client: AscClient,
+      input: z.output<Schema>,
+    ) => Promise<{ dryRun: boolean; run?: { id: string } }>,
+  ): Promise<void> {
+    const writeErr = stderr(command);
+    const wait = z
+      .object({
+        timeout: z.coerce.number().int().min(1).max(720),
+        interval: z.coerce.number().int().min(10).max(300),
+      })
+      .safeParse(input);
+    if (!wait.success) {
+      command.error(`[invalid_input] ${z.prettifyError(wait.error)}`);
+      return;
+    }
+    let status: string | undefined;
+    await runWrite(command, schema, input, async (client, parsed) => {
+      const result = await execute(client, parsed);
+      if (result.dryRun || !input.wait || !result.run) return result;
+      writeErr(`Started run ${result.run.id}; waiting for it to finish.\n`);
+      const finished = await waitForRun(client, result.run.id, wait.data, {
+        sleep,
+        now,
+        progress: (line) => writeErr(`${line}\n`),
+      });
+      status = finished.completionStatus ?? "unknown";
+      return { ...result, run: finished };
+    });
+    if (status && status !== "SUCCEEDED") {
+      command.error(`The run finished as ${status}.`);
+    }
+  }
+
+  /** --wait, --timeout and --interval for xcode-cloud start and rerun. */
+  function waitOptions(command: Command): Command {
+    return command
+      .option(
+        "--wait",
+        "after starting, wait until the run finishes; exits 1 unless it succeeded",
+      )
+      .option(
+        "--timeout <minutes>",
+        "with --wait, give up after this long, 1 to 720",
+        "60",
+      )
+      .option(
+        "--interval <seconds>",
+        "with --wait, time between checks, 10 to 300",
+        "30",
+      );
+  }
+
+  const start = xcodeCloud
+    .command("start")
+    .description(
+      "Start a workflow on a branch, tag or open pull request of its repository and print the new run. Without --yes, prints the workflow and the reference it would build. Uses Xcode Cloud compute hours.",
+    )
+    .argument("<workflow-id>", "workflow id from xcode-cloud workflows")
+    .option("--branch <name>", "build this branch")
+    .option("--tag <name>", "build this tag")
+    .option("--pull-request <number>", "build this open pull request")
+    .option("--clean", "start a clean build, without cached derived data");
+  waitOptions(start)
+    .option(...YES)
+    .action(async (workflowId: string, options, command: Command) => {
+      await startAndWait(
+        command,
+        startInput,
+        { workflowId, ...options },
+        startRun,
+      );
+    });
+
+  const rerun = xcodeCloud
+    .command("rerun")
+    .description(
+      "Rebuild an earlier run (same workflow and commit) and print the new run. Without --yes, prints the run it would rebuild. Uses Xcode Cloud compute hours.",
+    )
+    .argument("<run-id>", "run id from xcode-cloud runs")
+    .option("--clean", "start a clean build, without cached derived data");
+  waitOptions(rerun)
+    .option(...YES)
+    .action(async (runId: string, options, command: Command) => {
+      await startAndWait(command, rerunInput, { runId, ...options }, rerunRun);
     });
 
   return program;
